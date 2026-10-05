@@ -1,0 +1,724 @@
+/* ==========================================================================
+   BioHuman3D — dark clinical theme
+   Tokens ($NAME) are substituted from app/ui/theme.py:PALETTE at runtime.
+   Qt stylesheets do not support variables, so DO NOT hard-code hex values here
+   unless they are intentionally outside the palette.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- base --- */
+* {
+    outline: none;
+}
+
+QWidget {
+    background-color: transparent;
+    color: $TEXT;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", sans-serif;
+    font-size: 13px;
+}
+
+QMainWindow, #Root {
+    background-color: $BG_APP;
+}
+
+#Root {
+    border: 1px solid $BORDER_SOFT;
+}
+
+QToolTip {
+    background-color: $BG_ELEV;
+    color: $TEXT;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_SM;
+    padding: 6px 9px;
+    font-size: 12px;
+}
+
+/* ------------------------------------------------------------ title bar --- */
+#TitleBar {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 $BG_PANEL, stop:0.55 $BG_PANEL_2, stop:1 $BG_PANEL);
+    border-bottom: 1px solid $BORDER;
+    min-height: 54px;
+    max-height: 54px;
+}
+
+#BrandMark {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 $ACCENT, stop:1 $ACCENT_2);
+    border-radius: 10px;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    color: $TEXT_INVERT;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+#TitleBarTitle {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: $TEXT;
+}
+
+#TitleBarSubtitle {
+    font-size: 11px;
+    color: $TEXT_MUTED;
+}
+
+#WindowButton {
+    background: transparent;
+    border: none;
+    border-radius: $RADIUS_SM;
+    color: $TEXT_DIM;
+    font-size: 14px;
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 28px;
+}
+
+#WindowButton:hover {
+    background-color: $BG_HOVER;
+    color: $TEXT;
+}
+
+#WindowButton[danger="true"]:hover {
+    background-color: $DANGER;
+    color: $TEXT_INVERT;
+}
+
+/* --------------------------------------------------------------- panels --- */
+#SidePanel {
+    background-color: $BG_PANEL;
+    border-right: 1px solid $BORDER_SOFT;
+}
+
+#SidePanelRight {
+    background-color: $BG_PANEL;
+    border-left: 1px solid $BORDER_SOFT;
+}
+
+#CenterPanel {
+    background-color: $BG_APP;
+}
+
+#ViewportPlaceholder {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 $BG_PANEL, stop:1 $BG_APP);
+    border: 1px dashed $BORDER;
+    border-radius: $RADIUS_LG;
+}
+
+#PlaceholderTitle {
+    font-size: 18px;
+    font-weight: 700;
+    color: $TEXT_DIM;
+}
+
+#PlaceholderBody {
+    font-size: 12px;
+    color: $TEXT_MUTED;
+}
+
+#PanelHeader {
+    padding: 12px 14px 8px 14px;
+}
+
+#PanelHeaderTitle {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    color: $TEXT_MUTED;
+    text-transform: uppercase;
+}
+
+#PanelHint {
+    font-size: 11px;
+    color: $TEXT_MUTED;
+}
+
+/* --------------------------------------------------------------- cards --- */
+#Card {
+    background-color: $BG_PANEL_2;
+    border: 1px solid $BORDER_SOFT;
+    border-radius: $RADIUS_MD;
+}
+
+#CardHeader {
+    background: transparent;
+    border: none;
+    padding: 9px 10px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: $TEXT_DIM;
+}
+
+#CardHeader:hover {
+    color: $TEXT;
+    background-color: rgba(255, 255, 255, 0.03);
+    border-radius: $RADIUS_MD;
+}
+
+#CardHeader[expanded="true"] {
+    color: $ACCENT;
+}
+
+#CardBody {
+    background: transparent;
+}
+
+#CardCount {
+    color: $TEXT_MUTED;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* ------------------------------------------------------------- buttons --- */
+QPushButton {
+    background-color: $BG_ELEV;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_SM;
+    color: $TEXT;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 18px;
+}
+
+QPushButton:hover {
+    background-color: $BG_HOVER;
+    border-color: $ACCENT_DARK;
+}
+
+QPushButton:pressed {
+    background-color: $BG_PANEL_2;
+}
+
+QPushButton:disabled {
+    background-color: $BG_PANEL_2;
+    color: $TEXT_MUTED;
+    border-color: $BORDER_SOFT;
+}
+
+QPushButton:checked {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT;
+    color: $ACCENT;
+}
+
+QPushButton#PrimaryButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 $ACCENT, stop:1 $ACCENT_2);
+    border: none;
+    color: $TEXT_INVERT;
+    font-weight: 700;
+    padding: 8px 16px;
+    border-radius: $RADIUS_SM;
+}
+
+QPushButton#PrimaryButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 $ACCENT_HI, stop:1 $ACCENT);
+}
+
+QPushButton#PrimaryButton:pressed {
+    background: $ACCENT_DARK;
+}
+
+QPushButton#PrimaryButton:disabled {
+    background: $BG_ELEV;
+    color: $TEXT_MUTED;
+}
+
+QPushButton#GhostButton {
+    background: transparent;
+    border: 1px solid $BORDER;
+    color: $TEXT_DIM;
+}
+
+QPushButton#GhostButton:hover {
+    border-color: $ACCENT;
+    color: $ACCENT;
+    background-color: $ACCENT_SOFT;
+}
+
+QPushButton#DangerButton {
+    background: transparent;
+    border: 1px solid $DANGER;
+    color: $DANGER;
+}
+
+QPushButton#DangerButton:hover {
+    background-color: rgba(248, 113, 113, 0.14);
+}
+
+/* Segmented control (Local | Cloud | Auto, view presets, tabs) */
+QPushButton#SegmentButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: $RADIUS_PILL;
+    color: $TEXT_MUTED;
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+QPushButton#SegmentButton:hover {
+    color: $TEXT;
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+QPushButton#SegmentButton:checked {
+    background-color: $ACCENT;
+    color: $TEXT_INVERT;
+    border-color: $ACCENT;
+}
+
+#SegmentBar {
+    background-color: $BG_INPUT;
+    border: 1px solid $BORDER_SOFT;
+    border-radius: $RADIUS_PILL;
+    padding: 3px;
+}
+
+/* Quick-action chips */
+QPushButton#Chip {
+    background-color: $BG_INPUT;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_PILL;
+    color: $TEXT_DIM;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QPushButton#Chip:hover {
+    border-color: $ACCENT;
+    color: $ACCENT;
+    background-color: $ACCENT_SOFT;
+}
+
+QPushButton#Chip:disabled {
+    color: $TEXT_MUTED;
+    border-color: $BORDER_SOFT;
+}
+
+QPushButton#Chip:checked {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT;
+    color: $ACCENT;
+}
+
+/* Icon buttons in list rows */
+QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: $RADIUS_SM;
+    color: $TEXT_MUTED;
+    padding: 3px;
+    min-width: 22px;
+    min-height: 22px;
+}
+
+QToolButton:hover {
+    background-color: $BG_HOVER;
+    color: $TEXT;
+}
+
+QToolButton:checked {
+    color: $ACCENT;
+}
+
+QToolButton[role="eye"] {
+    font-size: 13px;
+}
+
+/* Floating viewport overlay toolbar */
+QFrame#OverlayBar {
+    background-color: rgba(13, 18, 29, 0.78);
+    border: 1px solid rgba(36, 48, 73, 0.9);
+    border-radius: $RADIUS_LG;
+}
+
+QLabel#StatusChip {
+    background-color: rgba(13, 18, 29, 0.80);
+    border: 1px solid rgba(36, 48, 73, 0.9);
+    border-radius: $RADIUS_MD;
+    color: $TEXT_DIM;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#StatusChip[accent="true"] {
+    color: $ACCENT;
+    border-color: $ACCENT_DARK;
+}
+
+/* -------------------------------------------------------------- inputs --- */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background-color: $BG_INPUT;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_SM;
+    color: $TEXT;
+    padding: 7px 10px;
+    selection-background-color: $ACCENT;
+    selection-color: $TEXT_INVERT;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+    border: 1px solid $ACCENT;
+    background-color: $BG_PANEL;
+}
+
+QLineEdit::placeholder {
+    color: $TEXT_MUTED;
+}
+
+QLineEdit#SearchField {
+    padding-left: 12px;
+    border-radius: $RADIUS_PILL;
+}
+
+QComboBox {
+    background-color: $BG_ELEV;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_SM;
+    color: $TEXT;
+    padding: 5px 10px;
+    min-height: 20px;
+    font-size: 12px;
+}
+
+QComboBox:hover {
+    border-color: $ACCENT_DARK;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid $TEXT_MUTED;
+    margin-right: 8px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: $BG_ELEV;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_SM;
+    color: $TEXT;
+    selection-background-color: $ACCENT_SOFT;
+    selection-color: $ACCENT;
+    padding: 4px;
+    outline: none;
+}
+
+/* ------------------------------------------------------------- sliders --- */
+QSlider::groove:horizontal {
+    height: 4px;
+    background: $BORDER;
+    border-radius: 2px;
+}
+
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 $ACCENT_DARK, stop:1 $ACCENT);
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    background: $TEXT;
+    border: 2px solid $ACCENT;
+    width: 11px;
+    height: 11px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+QSlider::handle:horizontal:hover {
+    background: $ACCENT;
+}
+
+QSlider[compact="true"]::groove:horizontal {
+    height: 3px;
+}
+
+QSlider[compact="true"]::handle:horizontal {
+    width: 9px;
+    height: 9px;
+    margin: -4px 0;
+}
+
+/* ---------------------------------------------------------- scrollbars --- */
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 9px;
+    margin: 2px 0;
+}
+
+QScrollBar::handle:vertical {
+    background: $BORDER;
+    border-radius: 4px;
+    min-height: 28px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: $ACCENT_DARK;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 9px;
+    margin: 0 2px;
+}
+
+QScrollBar::handle:horizontal {
+    background: $BORDER;
+    border-radius: 4px;
+    min-width: 28px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: $ACCENT_DARK;
+}
+
+QScrollBar::add-line, QScrollBar::sub-line,
+QScrollBar::add-page, QScrollBar::sub-page {
+    background: none;
+    border: none;
+    height: 0;
+    width: 0;
+}
+
+/* ---------------------------------------------------------------- lists --- */
+QListWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget::item {
+    border-radius: $RADIUS_SM;
+    padding: 5px 7px;
+    color: $TEXT_DIM;
+}
+
+QListWidget::item:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+    color: $TEXT;
+}
+
+QListWidget::item:selected {
+    background-color: $ACCENT_SOFT;
+    color: $ACCENT;
+    border: 1px solid $ACCENT_DARK;
+}
+
+/* Layer row */
+#LayerRow {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: $RADIUS_SM;
+}
+
+#LayerRow:hover {
+    background-color: rgba(255, 255, 255, 0.035);
+}
+
+#LayerRow[selected="true"] {
+    background-color: $ACCENT_SOFT;
+    border: 1px solid $ACCENT_DARK;
+}
+
+/* Qt QSS has no opacity property — dim by desaturating the text instead. */
+#LayerRow[dimmed="true"] #LayerName {
+    color: $TEXT_MUTED;
+    font-weight: 400;
+}
+
+#LayerName {
+    font-size: 12px;
+    font-weight: 600;
+    color: $TEXT;
+}
+
+#LayerMeta {
+    font-size: 10px;
+    color: $TEXT_MUTED;
+}
+
+#LayerSwatch {
+    border-radius: 3px;
+    min-width: 10px;
+    max-width: 10px;
+    min-height: 10px;
+    max-height: 10px;
+}
+
+#GroupHeader {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: $TEXT_MUTED;
+    padding: 9px 4px 3px 4px;
+}
+
+/* ---------------------------------------------------------------- chat --- */
+#ChatView {
+    background-color: $BG_INPUT;
+    border: 1px solid $BORDER_SOFT;
+    border-radius: $RADIUS_MD;
+    padding: 8px;
+    font-size: 12.5px;
+    line-height: 152%;
+}
+
+#ChatInput {
+    background-color: $BG_INPUT;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_MD;
+    padding: 8px 10px;
+}
+
+#TranscriptHeader {
+    color: $TEXT_MUTED;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* Narration cue list */
+#CueRow {
+    border-left: 2px solid $BORDER;
+    padding: 6px 8px;
+    color: $TEXT_MUTED;
+    font-size: 11.5px;
+}
+
+#CueRow[active="true"] {
+    border-left: 2px solid $ACCENT;
+    color: $TEXT;
+    background-color: $ACCENT_SOFT;
+    border-radius: 0 $RADIUS_SM $RADIUS_SM 0;
+}
+
+/* --------------------------------------------------------------- misc  --- */
+#Divider {
+    background-color: $BORDER_SOFT;
+    max-height: 1px;
+    min-height: 1px;
+    border: none;
+}
+
+#VerticalDivider {
+    background-color: $BORDER_SOFT;
+    max-width: 1px;
+    min-width: 1px;
+    border: none;
+}
+
+#Dot {
+    border-radius: 4px;
+    min-width: 8px;
+    max-width: 8px;
+    min-height: 8px;
+    max-height: 8px;
+    background-color: $TEXT_MUTED;
+}
+
+#Dot[state="ok"]      { background-color: $SUCCESS; }
+#Dot[state="warn"]    { background-color: $WARNING; }
+#Dot[state="off"]     { background-color: $TEXT_MUTED; }
+#Dot[state="error"]   { background-color: $DANGER; }
+
+#Kbd {
+    background-color: $BG_ELEV;
+    border: 1px solid $BORDER;
+    border-radius: 4px;
+    color: $TEXT_DIM;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+}
+
+QFrame#Toolbar {
+    background-color: $BG_PANEL_2;
+    border-top: 1px solid $BORDER_SOFT;
+    border-bottom: 1px solid $BORDER_SOFT;
+}
+
+QSplitter::handle {
+    background-color: $BORDER_SOFT;
+}
+
+QSplitter::handle:horizontal {
+    width: 1px;
+}
+
+QSplitter::handle:hover {
+    background-color: $ACCENT_DARK;
+}
+
+QStatusBar {
+    background-color: $BG_PANEL;
+    border-top: 1px solid $BORDER;
+    color: $TEXT_DIM;
+    font-size: 11px;
+}
+
+QStatusBar::item {
+    border: none;
+}
+
+QProgressBar {
+    background-color: $BG_INPUT;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_PILL;
+    height: 6px;
+    text-align: center;
+    color: transparent;
+}
+
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 $ACCENT_DARK, stop:1 $ACCENT);
+    border-radius: $RADIUS_PILL;
+}
+
+QCheckBox {
+    spacing: 7px;
+    color: $TEXT_DIM;
+    font-size: 12px;
+}
+
+QCheckBox::indicator {
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border: 1px solid $BORDER;
+    background-color: $BG_INPUT;
+}
+
+QCheckBox::indicator:hover {
+    border-color: $ACCENT_DARK;
+}
+
+QCheckBox::indicator:checked {
+    background-color: $ACCENT;
+    border-color: $ACCENT;
+    image: none;
+}

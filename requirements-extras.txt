@@ -1,0 +1,35 @@
+# ===========================================================================
+# BioHuman3D - OPTIONAL extras (voiceover + audio playback)
+#
+# Installed on a best-effort basis. If any of these fail, the application still
+# launches and runs; it simply reports voiceover as unavailable.
+#
+# NOTE on the audio playback engine:
+#   The upstream `pygame` project has NO wheels for Python 3.14, so pip falls
+#   back to a source build that fails (Python 3.14 removed `distutils.msvccompiler`).
+#   `pygame-ce` is the community-maintained drop-in fork: identical `import pygame`
+#   API, and it publishes wheels for 3.12 / 3.13 / 3.14. Use it.
+#
+#   If you are on Python <= 3.13 and specifically want upstream pygame, swap the
+#   line below for:  pygame>=2.5
+# ===========================================================================
+
+pyttsx3>=2.90          # offline SAPI5 voices (pure-python; used for all narration)
+pygame-ce>=2.5         # playback of cached cloud (ElevenLabs / pre-rendered) clips
+
+# Narrated tour video export (MP4). VTK's pip wheel does NOT include
+# vtkFFMPEGWriter, so encoding goes through imageio + a bundled ffmpeg binary.
+# imageio-ffmpeg ships py3-none-win_amd64 wheels, so this works on 3.10-3.14.
+imageio>=2.34
+imageio-ffmpeg>=0.4.9
+
+# ---------------------------------------------------------------------------
+# Not installed by default - uncomment if you need them
+# ---------------------------------------------------------------------------
+# elevenlabs>=1.0      # premium cloud voices (also needs an API key in Settings)
+# torch>=2.2           # local GPU inference; install the CUDA build instead:
+#                      #   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# transformers>=4.41   # in-process local models (no Ollama/LM Studio server)
+# accelerate>=0.30
+# bitsandbytes>=0.43   # 4-bit / 8-bit quantization for local inference
+# nvidia-ml-py>=12.0   # NVML fallback when nvidia-smi is unavailable

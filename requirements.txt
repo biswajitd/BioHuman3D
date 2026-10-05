@@ -1,0 +1,20 @@
+# ===========================================================================
+# BioHuman3D - CORE dependencies (required to launch)
+#
+# These must install successfully. Everything the application needs to start,
+# render the 3D viewport and talk to LLMs is here.
+#
+# Optional features (voiceover / cached cloud audio) live in
+# requirements-extras.txt and are installed on a best-effort basis.
+#
+# Wheel availability is what matters here. Verified for Python 3.14:
+#   PyQt6 6.11 / PyQt6-Qt6 6.11  -> cp314 wheels published
+#   vtk   9.7.1                  -> cp314 wheels published
+#   numpy, requests              -> pure-python / universal wheels
+# ===========================================================================
+
+PyQt6>=6.6,<7
+PyQt6-Qt6>=6.6
+vtk>=9.3.0
+numpy>=1.26
+requests>=2.31
