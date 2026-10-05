@@ -37,7 +37,8 @@ from typing import Dict, List, Optional, Sequence
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
-from app.core.video_math import ease_in_out_cubic, lerp_state, wrap_caption
+from app.core.video_math import ease_in_out_cubic, lerp_state
+from app.video.captions import chunk_at, chunk_text
 from app.core.viewport import BACKGROUNDS, VIEW_PRESETS
 from app.core.vtk_utils import VTK_AVAILABLE, vtk
 from app.video.narration import (AudioTrackBuilder, NarrationClip,
@@ -134,6 +135,9 @@ class Segment:
     layers_from: Dict[str, float] = field(default_factory=dict)
     layers_to: Dict[str, float] = field(default_factory=dict)
     effect: Optional[object] = None          # SceneEffect animated during this segment
+    chunks: List[str] = field(default_factory=list)   # caption chunks, in speech order
+    speech: float = 0.0                      # spoken duration (s)
+    speech_start: float = 0.0                # offset of speech within the segment
 
     @property
     def end(self) -> float:
@@ -235,6 +239,7 @@ class TourVideoExporter(QObject):
         self._tour = None
         self._meta: Dict[str, str] = {}
         self._active_effect = None
+        self._overlay = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(0)          # drain as fast as the UI allows
@@ -316,6 +321,8 @@ class TourVideoExporter(QObject):
             voice_id=str(self._config.get("audio.voice", "") or ""),
             enabled=bool(settings.include_audio)
             and bool(self._config.get("audio.enabled", True)),
+            neural=self._neural_request(),
+            cache_dir=self._config.paths.audio_cache,
             parent=self,
         )
         # THREAD SAFETY: connect to *bound methods*, never lambdas. A lambda is
@@ -328,6 +335,19 @@ class TourVideoExporter(QObject):
         self._synth.failed.connect(self._on_synth_failed)
         self._synth.start()
         return True
+
+    def _attribution(self) -> str:
+        """Credit line required by the anatomy licence (BodyParts3D: CC BY 4.0)."""
+        sources = {getattr(state, "source", "") for state in self._viewport.layers.values()}
+        if "bodyparts3d" in sources:
+            return "Anatomy: BodyParts3D © The Database Center for Life Science, CC BY 4.0"
+        return ""
+
+    def _neural_request(self):
+        if str(self._config.get("audio.backend", "edge")) not in ("edge", "azure", "google"):
+            return None
+        from app.audio.neural_tts import from_config
+        return from_config(self._config)
 
     # -- synthesis callbacks (always delivered on the GUI thread) ----------
     def _on_synth_progress(self, percent: int, message: str) -> None:
@@ -373,10 +393,6 @@ class TourVideoExporter(QObject):
         self._frame_total = sum(
             max(1, int(segment.duration * self._settings.fps)) for segment in self._queue)
         self._build_renderer()
-
-        if self._caption is not None:
-            self._title.SetText(3, f"  {getattr(tour, 'title', 'Guided tour')}")
-            self._mark.SetText(2, "BioHuman3D  ")
 
         self.progress.emit(15, "Rendering frames…")
         self._timer.start()
@@ -426,6 +442,8 @@ class TourVideoExporter(QObject):
                 layers_from=dict(previous_layers),
                 layers_to=layers_to,
                 effect=effect,
+                chunks=chunk_text(getattr(keyframe, "narration", "")),
+                speech=spoken,
             ))
 
             if clip is not None:
@@ -548,26 +566,14 @@ class TourVideoExporter(QObject):
 
         self._apply_ambient_occlusion()
 
-        if self._settings.burn_captions:
-            self._caption = vtk.vtkCornerAnnotation()
-            self._caption.SetLinearFontScaleFactor(12)
-            self._caption.GetTextProperty().SetColor(0.95, 0.97, 1.0)
-            self._caption.GetTextProperty().SetBackgroundColor(0.02, 0.03, 0.06)
-            self._caption.GetTextProperty().SetBackgroundOpacity(0.55)
-            self._caption.GetTextProperty().SetFrame(True)
-            self._caption.GetTextProperty().SetFrameColor(0.13, 0.83, 0.93)
-            self._caption.GetTextProperty().BoldOn()
-            self._renderer.AddViewProp(self._caption)
-
-            self._title = vtk.vtkCornerAnnotation()
-            self._title.SetLinearFontScaleFactor(6)
-            self._title.GetTextProperty().SetColor(0.60, 0.72, 0.86)
-            self._renderer.AddViewProp(self._title)
-
-            self._mark = vtk.vtkCornerAnnotation()
-            self._mark.SetLinearFontScaleFactor(5)
-            self._mark.GetTextProperty().SetColor(0.35, 0.45, 0.60)
-            self._renderer.AddViewProp(self._mark)
+        # Titles and captions are drawn by Qt after capture (see captions.py):
+        # VTK text cannot shape Indic or Arabic scripts.
+        from app.video.captions import CaptionRenderer
+        from app.audio.languages import language
+        width, height = self._settings.even_dimensions()
+        self._overlay = CaptionRenderer(
+            width, height, rtl=language(str(self._config.get("audio.language", "en-IN"))).rtl,
+            attribution=self._attribution())
 
     def _apply_ambient_occlusion(self) -> None:
         """Add a screen-space ambient occlusion pass.
@@ -651,11 +657,12 @@ class TourVideoExporter(QObject):
         if self._active_effect is not None:
             self._active_effect.apply(self._viewport, local_time)
 
-        if self._caption is not None:
-            self._caption.SetText(0, "  " + wrap_caption(segment.narration))
-            self._title.SetText(3, f"  {segment.title}")
-
         frame = self._capture()
+        if frame is not None and self._overlay is not None:
+            caption = ""
+            if self._settings.burn_captions:
+                caption = chunk_at(segment.chunks, local_time - segment.speech_start, segment.speech)
+            frame = self._overlay.compose(frame, segment.title, caption)
         if frame is not None:
             if self._writer is None:
                 self._writer = imageio.get_writer(

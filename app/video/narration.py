@@ -79,6 +79,7 @@ class NarrationSynthWorker(QThread):
 
     def __init__(self, cues: Sequence, work_dir: Path, *, rate: int = 175,
                  volume: float = 0.9, voice_id: str = "", enabled: bool = True,
+                 neural=None, cache_dir: Optional[Path] = None,
                  parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._cues = list(cues)
@@ -88,6 +89,9 @@ class NarrationSynthWorker(QThread):
         self._voice_id = voice_id
         self._enabled = enabled
         self._cancel = False
+        self._neural = neural                  # VoiceRequest for a neural engine, or None
+        self._cache_dir = Path(cache_dir) if cache_dir else self._dir / "cache"
+        self._neural_failed = False
 
     def cancel(self) -> None:
         self._cancel = True
@@ -98,7 +102,7 @@ class NarrationSynthWorker(QThread):
 
         clips: List[NarrationClip] = []
         total = max(1, len(self._cues))
-        use_tts = self._enabled and PYTTsx3_AVAILABLE
+        use_tts = self._enabled and (PYTTsx3_AVAILABLE or self._neural is not None)
 
         for position, cue in enumerate(self._cues):
             if self._cancel:
@@ -129,6 +133,20 @@ class NarrationSynthWorker(QThread):
         self.completed.emit(clips)
 
     def _synthesise_one(self, text: str, target: Path) -> bool:
+        if self._neural is not None and not self._neural_failed:
+            from app.audio.neural_tts import TTSError, synthesize
+            import shutil
+            try:
+                shutil.copy2(synthesize(text, self._neural, self._cache_dir), target)
+                return True
+            except TTSError as exc:
+                self._neural_failed = True
+                self.failed.emit(f"Neural voice unavailable — falling back to the system voice. {exc}")
+        if not PYTTsx3_AVAILABLE:
+            return False
+        return self._synthesise_sapi(text, target)
+
+    def _synthesise_sapi(self, text: str, target: Path) -> bool:
         """Render a single cue using a **fresh** engine.
 
         Do NOT reuse one ``pyttsx3`` engine for several ``save_to_file`` calls

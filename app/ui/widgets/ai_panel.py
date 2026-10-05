@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel,
                              QSizePolicy, QStackedWidget, QTextEdit,
                              QVBoxLayout, QWidget)
 
+from app.audio.languages import ENGINES
 from app.audio.scripts import get_tour, video_subjects
 from app.ui.widgets.collapsible import CollapsibleSection
 from app.ui.widgets.controls import (GLYPH, ChipButton, IconButton,
@@ -287,9 +288,7 @@ class AIPanel(QWidget):
         backend_label = QLabel("Engine")
         backend_label.setObjectName("LayerMeta")
         self._backend = QComboBox()
-        for label, key in (("System voices (offline)", "pyttsx3"),
-                           ("ElevenLabs (cloud)", "elevenlabs"),
-                           ("Silent", "none")):
+        for key, label in ENGINES:
             self._backend.addItem(label, key)
         self._backend.currentIndexChanged.connect(
             lambda: self.audioBackendChanged.emit(self._backend.currentData()))
@@ -301,12 +300,14 @@ class AIPanel(QWidget):
         # Indian English is listed first and marked when not installed, so a
         # missing voice reads as a gap to fix rather than an absent feature.
         dialect_row = QHBoxLayout()
-        dialect_label = QLabel("Dialect")
+        dialect_label = QLabel("Language")
         dialect_label.setObjectName("LayerMeta")
         self._dialect = QComboBox()
+        self._dialect.setMaxVisibleItems(24)
         self._dialect.setToolTip(
-            "Target English dialect for narration. Applies to live voiceover and "
-            "to exported videos.")
+            "Narration language and accent — English dialects (Indian English first), Indian "
+            "languages and major international languages. Applies to live voiceover and to "
+            "exported videos; non-English narration is translated first.")
         self._dialect.currentIndexChanged.connect(
             lambda: self.audioDialectChanged.emit(self._dialect.currentData() or ""))
         dialect_row.addWidget(dialect_label)
@@ -672,9 +673,7 @@ class AIPanel(QWidget):
                           gender: str = "any", note: str = "") -> None:
         self._backend.blockSignals(True)
         self._backend.clear()
-        labels = {"pyttsx3": "System voices (offline)",
-                  "elevenlabs": "ElevenLabs (cloud)",
-                  "none": "Silent"}
+        labels = dict(ENGINES)
         for key in backends:
             self._backend.addItem(labels.get(key, key), key)
         index = self._backend.findData(backend)
@@ -687,6 +686,10 @@ class AIPanel(QWidget):
             self._dialect.clear()
             for code, label in dialects:
                 self._dialect.addItem(label, code)
+                if not code:                      # group heading: visible, not selectable
+                    item = self._dialect.model().item(self._dialect.count() - 1)
+                    if item is not None:
+                        item.setEnabled(False)
             dindex = self._dialect.findData(dialect)
             if dindex >= 0:
                 self._dialect.setCurrentIndex(dindex)
@@ -696,7 +699,7 @@ class AIPanel(QWidget):
 
         self._voice.blockSignals(True)
         self._voice.clear()
-        self._voice.addItem("Auto (best match for dialect)", "")
+        self._voice.addItem("Auto (best match for language and voice)", "")
         for item in voices:
             self._voice.addItem(str(item), getattr(item, "id", ""))
         vindex = self._voice.findData(voice)
@@ -712,7 +715,8 @@ class AIPanel(QWidget):
         """Show why the active voice may differ from the requested dialect."""
         self._voice_note.setText(note or "")
         self._voice_note.setVisible(bool(note))
-        self._voice_help.setVisible(bool(note) and warn and "not installed" in note.lower())
+        self._voice_help.setVisible(bool(note) and warn and "not installed" in note.lower()
+                                    and "neural" not in note.lower())
 
     # -- transcript --------------------------------------------------------
     def append_user(self, text: str) -> None:

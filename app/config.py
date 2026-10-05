@@ -82,7 +82,17 @@ DEFAULTS: Dict[str, Any] = {
 
     # ── audio ──────────────────────────────────────────────────────────────
     "audio.enabled": True,
-    "audio.backend": "pyttsx3",              # pyttsx3 | elevenlabs | none
+    "audio.backend": "edge",                 # edge | azure | google | elevenlabs | pyttsx3 | none
+    "audio.language": "en-IN",               # BCP-47 narration language
+    "audio.gender": "female",                # female | male
+    "audio.neural_voice": "",                # explicit neural voice id (optional)
+    "audio.azure_key": "",
+    "audio.azure_region": "",                # e.g. centralindia, eastus
+    "audio.google_key": "",
+    "i18n.engine": "llm",                    # llm | google | azure
+    "i18n.google_key": "",
+    "i18n.azure_key": "",
+    "i18n.azure_region": "",
     "audio.voice": "",
     "audio.rate": 175,                       # words / minute (pyttsx3 scale)
     "audio.volume": 0.9,                     # 0.0 – 1.0

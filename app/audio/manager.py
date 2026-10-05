@@ -29,7 +29,9 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from app.audio.voices import (ANY_DIALECT, DIALECTS, GENDER_ANY, VoiceOption,
+from app.audio.languages import ENGINES, LANGUAGES, NEURAL_ENGINES, language
+from app.audio.neural_tts import TTSError, engine_ready, from_config, synthesize
+from app.audio.voices import (ANY_DIALECT, DIALECT_BY_CODE, DIALECTS, GENDER_ANY, VoiceOption,
                               dialects_available, enumerate_elevenlabs_voices,
                               enumerate_pyttsx3_voices, resolve_voice)
 from app.core.wincom import co_initialize, co_uninitialize
@@ -78,6 +80,25 @@ class Voice:
 
 
 @dataclass
+class NeuralVoice:
+    """A cloud neural voice for the selected language (display + id only)."""
+
+    id: str
+    language: str
+    gender: str
+    engine: str
+
+    @property
+    def display(self) -> str:
+        lang = language(self.language)
+        short = self.id.split("-")[-1].replace("Neural", "") if "Neural" in self.id else self.id
+        return f"{short} — {lang.name} — {self.gender.capitalize()} (neural)"
+
+    def __str__(self) -> str:
+        return self.display
+
+
+@dataclass
 class NarrationCue:
     """One spoken paragraph, optionally bound to a camera keyframe."""
 
@@ -103,7 +124,8 @@ class NarrationWorker(QThread):
     def __init__(self, *, rate: int = 175, volume: float = 0.9,
                  voice_id: str = "", backend: str = "pyttsx3",
                  cache_dir: Optional[Path] = None, api_key: str = "",
-                 elevenlabs_voice: str = "", parent: Optional[QObject] = None) -> None:
+                 elevenlabs_voice: str = "", neural=None,
+                 parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._queue: "queue.Queue[Optional[NarrationCue]]" = queue.Queue()
         self._rate = rate
@@ -113,6 +135,8 @@ class NarrationWorker(QThread):
         self._cache_dir = cache_dir
         self._api_key = api_key
         self._el_voice = elevenlabs_voice
+        self._neural = neural
+        self._neural_failed = False
 
         self._stop_flag = threading.Event()
         self._engine = None
@@ -215,6 +239,43 @@ class NarrationWorker(QThread):
             self.failed.emit(f"Playback failed: {exc}")
             return False
 
+    def _play_wav(self, path: Path) -> bool:
+        """Play a WAV and block until it ends (or stop is requested)."""
+        if self._ensure_mixer():
+            try:
+                pygame.mixer.music.load(str(path))            # type: ignore[union-attr]
+                pygame.mixer.music.set_volume(float(self._volume))  # type: ignore[union-attr]
+                pygame.mixer.music.play()                     # type: ignore[union-attr]
+                while pygame.mixer.music.get_busy():          # type: ignore[union-attr]
+                    if self._stop_flag.is_set():
+                        pygame.mixer.music.stop()             # type: ignore[union-attr]
+                        return True
+                    self.msleep(80)
+                return True
+            except Exception as exc:
+                self.failed.emit(f"Playback failed: {exc}")
+        import sys
+        if sys.platform == "win32":                           # no pygame: Windows' own player
+            try:
+                import winsound
+                winsound.PlaySound(str(path), winsound.SND_FILENAME)
+                return True
+            except Exception as exc:
+                self.failed.emit(f"Playback failed: {exc}")
+        return False
+
+    def _speak_neural(self, cue: NarrationCue) -> bool:
+        if self._neural is None or self._neural_failed:
+            return False
+        try:
+            path = synthesize(cue.text, self._neural, self._cache_dir or Path.cwd())
+        except TTSError as exc:
+            # Report once, then fall back to the system voice for the rest of the tour.
+            self._neural_failed = True
+            self.failed.emit(f"Neural voice unavailable — using the system voice. {exc}")
+            return False
+        return self._play_wav(path)
+
     def _speak_pyttsx3(self, text: str) -> bool:
         """Speak one utterance with a **fresh** engine.
 
@@ -273,7 +334,9 @@ class NarrationWorker(QThread):
             self.cueStarted.emit(cue.index, cue.text)
 
             spoken = False
-            if self._backend == "elevenlabs":
+            if self._backend in ("edge", "azure", "google"):
+                spoken = self._speak_neural(cue)
+            elif self._backend == "elevenlabs":
                 spoken = self._speak_elevenlabs(cue)
             if not spoken and self._backend != "none":
                 spoken = self._speak_pyttsx3(cue.text)
@@ -324,7 +387,42 @@ class AudioManager(QObject):
             "cache_dir": self._config.paths.audio_cache,
             "api_key": self._config.api_key("elevenlabs"),
             "elevenlabs_voice": str(self._config.get("audio.elevenlabs_voice", "")),
+            "neural": self.neural_request(),
         }
+
+    # ------------------------------------------------------------ neural / language
+    def engine(self) -> str:
+        return str(self._config.get("audio.backend", "edge"))
+
+    def neural_request(self):
+        """Voice request for the configured neural engine, or ``None``."""
+        if self.engine() not in ("edge", "azure", "google"):
+            return None
+        return from_config(self._config)
+
+    def engine_status(self) -> tuple:
+        """``(ok, reason)`` for the configured engine."""
+        engine = self.engine()
+        if engine == "none":
+            return True, ""
+        if engine == "pyttsx3":
+            return PYTTsx3_AVAILABLE, "" if PYTTsx3_AVAILABLE else "pip install pyttsx3"
+        return engine_ready(from_config(self._config))
+
+    def current_language(self) -> str:
+        code = str(self._config.get("audio.language", "") or "")
+        if not code:
+            dialect = str(self._config.get("audio.dialect", "") or "")
+            code = dialect if dialect and dialect != ANY_DIALECT else "en-IN"
+        return code
+
+    def set_language(self, code: str) -> None:
+        self._config["audio.language"] = code
+        # The offline engine resolves by dialect; keep it in step where it can.
+        self._config["audio.dialect"] = code if code in DIALECT_BY_CODE else ANY_DIALECT
+        self._config["audio.voice"] = ""
+        self._config["audio.neural_voice"] = ""
+        self.resolve_selection(apply=True)
 
     def _ensure_worker(self) -> NarrationWorker:
         if self._worker is None or not self._worker.isRunning():
@@ -343,21 +441,18 @@ class AudioManager(QObject):
 
     # ------------------------------------------------------------- speaking
     def is_available(self) -> bool:
-        backend = str(self._config.get("audio.backend", "pyttsx3"))
+        backend = self.engine()
         if backend == "none":
             return False
         if backend == "elevenlabs":
             return bool(self._config.api_key("elevenlabs"))
+        if backend in ("edge", "azure", "google"):
+            return engine_ready(from_config(self._config))[0] or PYTTsx3_AVAILABLE
         return PYTTsx3_AVAILABLE
 
     def available_backends(self) -> List[str]:
-        out = []
-        if PYTTsx3_AVAILABLE:
-            out.append("pyttsx3")
-        if REQUESTS_AVAILABLE and self._config.api_key("elevenlabs"):
-            out.append("elevenlabs")
-        out.append("none")
-        return out
+        """Every engine; the panel marks the ones that still need setup."""
+        return [key for key, _label in ENGINES]
 
     def speak(self, text: str, *, index: int = -1, title: str = "",
               interrupt: bool = True) -> None:
@@ -419,7 +514,13 @@ class AudioManager(QObject):
             self._ensure_worker()
 
     def voices(self, refresh: bool = False) -> List[VoiceOption]:
-        """Installed voices, classified by dialect and gender (cached)."""
+        """Installed voices, classified by dialect and gender (cached).
+
+        For neural engines: the female and male neural voice of the language."""
+        if self.engine() in ("edge", "azure", "google"):
+            lang = language(self.current_language())
+            return [NeuralVoice(lang.female, lang.code, "female", self.engine()),
+                    NeuralVoice(lang.male, lang.code, "male", self.engine())]
         if self._voices_cache and not refresh:
             return self._voices_cache
         self._voices_cache = enumerate_pyttsx3_voices()
@@ -433,24 +534,33 @@ class AudioManager(QObject):
         """``(code, label)`` pairs for the UI. Dialects with no installed voice
         are marked rather than hidden, so a missing Indian English voice is
         visible as a gap to fix instead of silently absent."""
-        installed = set(dialects_available(self.voices()))
-        options = [(ANY_DIALECT, "Any dialect")]
-        for dialect in DIALECTS:
-            suffix = "" if dialect.code in installed else "   (not installed)"
-            options.append((dialect.code, f"{dialect.label}{suffix}"))
+        neural = self.engine() not in ("pyttsx3", "none")
+        installed = set() if neural else set(dialects_available(self.voices()))
+        options = []
+        last_group = ""
+        for lang in LANGUAGES:
+            if lang.group != last_group:
+                options.append(("", f"── {lang.group} ──"))
+                last_group = lang.group
+            suffix = ""
+            if not neural:
+                if lang.code not in DIALECT_BY_CODE:
+                    suffix = "   (neural voices only)"
+                elif lang.code not in installed:
+                    suffix = "   (not installed)"
+            options.append((lang.code, f"{lang.label}{suffix}"))
         return options
 
     def current_dialect(self) -> str:
-        return str(self._config.get("audio.dialect", ANY_DIALECT) or ANY_DIALECT)
+        """Selected narration language (BCP-47); kept for older call sites."""
+        return self.current_language()
 
     def current_gender(self) -> str:
         return str(self._config.get("audio.gender", GENDER_ANY) or GENDER_ANY)
 
     def set_dialect(self, code: str) -> None:
-        self._config["audio.dialect"] = code or ANY_DIALECT
-        # Drop any pinned voice so the dialect decides again.
-        self._config["audio.voice"] = ""
-        self.resolve_selection(apply=True)
+        if code:
+            self.set_language(code)
 
     def set_gender(self, gender: str) -> None:
         self._config["audio.gender"] = gender or GENDER_ANY
@@ -459,6 +569,13 @@ class AudioManager(QObject):
 
     def set_voice(self, voice_id: str) -> None:
         """Pin an explicit voice, overriding dialect/gender resolution."""
+        if self.engine() in ("edge", "azure", "google"):
+            lang = language(self.current_language())
+            self._config["audio.neural_voice"] = voice_id or ""
+            if voice_id in (lang.female, lang.male):
+                self._config["audio.gender"] = "male" if voice_id == lang.male else "female"
+            self.resolve_selection(apply=True)
+            return
         self._config["audio.voice"] = voice_id or ""
         self._resolved = None
         self._resolve_note = ""
@@ -471,6 +588,19 @@ class AudioManager(QObject):
         applied, so the UI can explain *why* the narration is not in the
         requested dialect instead of silently switching accent.
         """
+        if self.engine() in ("edge", "azure", "google"):
+            req = from_config(self._config)
+            voice = NeuralVoice(req.voice_name(), req.language, req.gender, req.engine)
+            ok, reason = engine_ready(req)
+            note = "" if ok else f"{reason} Until then the offline system voice is used."
+            if not language(req.language).is_english:
+                note = (note + " " if note else "") + (
+                    f"Narration is translated to {language(req.language).name} before it is spoken.")
+            self._resolved, self._resolve_note = voice, note
+            if apply:
+                self.apply_settings()
+            return voice, note
+
         catalogue = self.voices()
 
         # An explicitly pinned voice wins over dialect/gender resolution, so a

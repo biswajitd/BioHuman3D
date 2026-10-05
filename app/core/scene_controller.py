@@ -166,10 +166,19 @@ class SceneController(QObject):
         """
         return tour_list()
 
+    #: Optional hook ``tour -> tour | None`` (e.g. translate narration into the
+    #: selected language). ``None`` means "deferred": the hook restarts the tour
+    #: itself once it is ready.
+    tour_resolver = None
+
     def start_tour(self, tour_id: str, *, speak: bool = True) -> bool:
         tour = get_tour(tour_id)
         if tour is None:
             return False
+        if self.tour_resolver is not None:
+            tour = self.tour_resolver(tour)
+            if tour is None:
+                return False
 
         self._active_tour = tour
         self.tour.load(tour)

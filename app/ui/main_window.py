@@ -182,6 +182,33 @@ class SettingsDialog(QDialog):
         self._eleven.setEchoMode(QLineEdit.EchoMode.Password)
         self._eleven.setPlaceholderText("Optional — premium voiceovers")
         form.addRow("ElevenLabs key", self._eleven)
+        self._eleven_voice = QLineEdit(str(config.get("audio.elevenlabs_voice", "")))
+        self._eleven_voice.setPlaceholderText("Voice id from your ElevenLabs library")
+        form.addRow("ElevenLabs voice", self._eleven_voice)
+
+        # -- neural voices & translation -----------------------------------
+        self._azure_key = QLineEdit(str(config.get("audio.azure_key", "")))
+        self._azure_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._azure_key.setPlaceholderText("Azure AI Speech key (production neural voices)")
+        form.addRow("Azure Speech key", self._azure_key)
+        self._azure_region = QLineEdit(str(config.get("audio.azure_region", "")))
+        self._azure_region.setPlaceholderText("e.g. centralindia, southeastasia, eastus")
+        form.addRow("Azure region", self._azure_region)
+        self._google_key = QLineEdit(str(config.get("audio.google_key", "")))
+        self._google_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._google_key.setPlaceholderText("Google Cloud API key (Text-to-Speech / Translation)")
+        form.addRow("Google Cloud key", self._google_key)
+        self._i18n_engine = QComboBox()
+        for label, key in (("Your AI model (local or cloud)", "llm"),
+                           ("Google Cloud Translation", "google"),
+                           ("Azure AI Translator", "azure")):
+            self._i18n_engine.addItem(label, key)
+        self._i18n_engine.setCurrentIndex(max(0, self._i18n_engine.findData(config.get("i18n.engine", "llm"))))
+        form.addRow("Translate narration with", self._i18n_engine)
+        self._translator_key = QLineEdit(str(config.get("i18n.azure_key", "")))
+        self._translator_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._translator_key.setPlaceholderText("Azure Translator key (if chosen above)")
+        form.addRow("Azure Translator key", self._translator_key)
 
         self._temperature = QComboBox()
         for value in (0.0, 0.2, 0.3, 0.5, 0.7, 1.0):
@@ -219,6 +246,14 @@ class SettingsDialog(QDialog):
         self._config["ai.openai_key"] = self._openai.text().strip()
         self._config["ai.anthropic_key"] = self._anthropic.text().strip()
         self._config["audio.elevenlabs_key"] = self._eleven.text().strip()
+        self._config["audio.elevenlabs_voice"] = self._eleven_voice.text().strip()
+        self._config["audio.azure_key"] = self._azure_key.text().strip()
+        self._config["audio.azure_region"] = self._azure_region.text().strip()
+        self._config["audio.google_key"] = self._google_key.text().strip()
+        self._config["i18n.engine"] = self._i18n_engine.currentData()
+        self._config["i18n.azure_key"] = self._translator_key.text().strip()
+        if not self._config.get("i18n.azure_region", ""):
+            self._config["i18n.azure_region"] = self._azure_region.text().strip()
         self._config["ai.temperature"] = float(self._temperature.currentData())
         self._config["render.depth_peeling"] = self._depth_peeling.isChecked()
         self._config["render.fxaa"] = self._fxaa.isChecked()
@@ -293,6 +328,8 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.ai_panel)
         self._mri_sim = None
         self._mri_worker = None
+        self._translation_worker = None
+        self._pending_localization = None
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
@@ -569,6 +606,10 @@ class MainWindow(QMainWindow):
         sp.motionTourRequested.connect(self._play_motion_tour)
         sp.exportRequested.connect(self._export_simulation)
         sp.stopRequested.connect(self.controller.stop_tour)
+        from app.i18n.translate import Translator
+        self.translator = Translator(self.config, self.ai)
+        self.controller.tour_resolver = lambda tour: self._localize(
+            tour, lambda local: self.controller.start_tour(local.id))
         sp.mriSimulateRequested.connect(self._simulate_mri)
         sp.mriLoadRequested.connect(self._load_scan)
         sp.mriPaneToggled.connect(self._show_mri_pane)
@@ -858,6 +899,52 @@ class MainWindow(QMainWindow):
         self.ai_panel.show_tab("media")
         self._generate_video(tour.id, self.ai_panel.current_video_preset())
 
+    # ============================================================ language
+    def _localize(self, tour, then):
+        """Tour in the narration language, translating first if needed.
+
+        Returns the localized tour when it is ready now, else ``None`` and calls
+        ``then(localized)`` on the GUI thread when translation finishes."""
+        from app.audio.languages import language
+        from app.i18n.translate import localized_tour, tour_sources
+        code = self.audio.current_language()
+        lang = language(code)
+        if lang.is_english or "@" in tour.id or self.audio.engine() == "none":
+            return tour
+        memory = self.translator.memory(code)
+        if not memory.missing(tour_sources(tour)):
+            return localized_tour(tour, code, memory)
+        if self._translation_worker is not None and self._translation_worker.isRunning():
+            self.status_message("A translation is already running…", 4000)
+            return None
+        ok, reason = self.translator.ready()
+        if not ok:
+            QMessageBox.warning(self, "Translation needed",
+                                f"Narration in {lang.name} needs translating first.\n\n{reason}")
+            return None
+        from app.i18n.worker import TranslationWorker
+        self._pending_localization = (tour, code, then)
+        self._translation_worker = TranslationWorker(self.translator, tour_sources(tour), code, parent=self)
+        self._translation_worker.progress.connect(self._on_translation_progress)
+        self._translation_worker.done.connect(self._on_translation_done)
+        self.status_message(f"Translating narration to {lang.name}…", 0)
+        self._translation_worker.start()
+        return None
+
+    def _on_translation_progress(self, percent: int, message: str) -> None:
+        self.status_message(f"{message} ({percent}%)", 0)
+
+    def _on_translation_done(self, ok: bool, message: str) -> None:
+        pending, self._pending_localization = self._pending_localization, None
+        if not ok or pending is None:
+            self.status_message(f"Translation failed: {message}" if message else "Translation cancelled.", 8000)
+            return
+        from app.i18n.translate import localized_tour
+        tour, code, then = pending
+        self.status_message(f"Narration translated. Translations are saved in "
+                            f"{self.translator.folder} for review.", 8000)
+        then(localized_tour(tour, code, self.translator.memory(code)))
+
     # ================================================================ MRI
     def _show_mri_pane(self, show: bool) -> None:
         self.slice_pane.setVisible(bool(show))
@@ -1017,6 +1104,10 @@ class MainWindow(QMainWindow):
     def _on_audio_backend(self, backend: str) -> None:
         self.config["audio.backend"] = backend
         self.audio.apply_settings()
+        self._refresh_audio_options()
+        ok, reason = self.audio.engine_status()
+        if not ok and reason:
+            self.ai_panel.append_note(reason)
         if backend == "elevenlabs" and not self.config.api_key("elevenlabs"):
             self.ai_panel.append_note(
                 "ElevenLabs selected but no API key is set — add one in Settings.")
@@ -1105,6 +1196,9 @@ class MainWindow(QMainWindow):
         if tour is None:
             self.status_message("Select a guided tour first.", 4000)
             return
+        tour = self._localize(tour, lambda local: self._generate_video(local.id, preset_key))
+        if tour is None:
+            return                           # translating first; export resumes when done
         if self.video.is_running:
             self.status_message("A video export is already running.", 4000)
             return

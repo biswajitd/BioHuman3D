@@ -14,7 +14,8 @@
 #   line below for:  pygame>=2.5
 # ===========================================================================
 
-pyttsx3>=2.90          # offline SAPI5 voices (pure-python; used for all narration)
+edge-tts>=6.1          # natural Microsoft neural voices, 50+ languages, no key (needs internet)
+pyttsx3>=2.90          # offline SAPI5 voices (fallback when offline)
 pygame-ce>=2.5         # playback of cached cloud (ElevenLabs / pre-rendered) clips
 
 # Narrated tour video export (MP4). VTK's pip wheel does NOT include
