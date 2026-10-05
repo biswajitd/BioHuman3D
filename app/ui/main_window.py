@@ -280,8 +280,19 @@ class MainWindow(QMainWindow):
         self.splitter.setChildrenCollapsible(True)
         self.splitter.setHandleWidth(1)
         self.splitter.addWidget(self.layer_panel)
-        self.splitter.addWidget(self.viewport_panel)
+        # Centre: the 3D view, and (on demand) the paired MRI slice beside it.
+        from app.imaging.slice_pane import SlicePane
+        self.slice_pane = SlicePane(self.viewport)
+        self.slice_pane.setVisible(False)
+        self.center_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.center_splitter.setChildrenCollapsible(True)
+        self.center_splitter.setHandleWidth(2)
+        self.center_splitter.addWidget(self.viewport_panel)
+        self.center_splitter.addWidget(self.slice_pane)
+        self.splitter.addWidget(self.center_splitter)
         self.splitter.addWidget(self.ai_panel)
+        self._mri_sim = None
+        self._mri_worker = None
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
@@ -558,6 +569,16 @@ class MainWindow(QMainWindow):
         sp.motionTourRequested.connect(self._play_motion_tour)
         sp.exportRequested.connect(self._export_simulation)
         sp.stopRequested.connect(self.controller.stop_tour)
+        sp.mriSimulateRequested.connect(self._simulate_mri)
+        sp.mriLoadRequested.connect(self._load_scan)
+        sp.mriPaneToggled.connect(self._show_mri_pane)
+        if hasattr(self.viewport, "clipMoved"):
+            self.viewport.clipMoved.connect(self.slice_pane.follow_clip)
+        self.slice_pane.planeRequested.connect(self._on_slice_plane)
+        self.slice_pane.structureClicked.connect(self._on_mri_structure_clicked)
+        self.slice_pane.sequenceRequested.connect(self._on_mri_sequence)
+        self.slice_pane.closeRequested.connect(lambda: self._show_mri_pane(False))
+        self.slice_pane.set_name_lookup(self._structure_at_point)
 
         # -- video exporter → panel -------------------------------------------
         self.video.progress.connect(self._on_video_progress)
@@ -836,6 +857,113 @@ class MainWindow(QMainWindow):
         self.ai_panel.add_video_subject(kind.capitalize(), tour.title, tour)
         self.ai_panel.show_tab("media")
         self._generate_video(tour.id, self.ai_panel.current_video_preset())
+
+    # ================================================================ MRI
+    def _show_mri_pane(self, show: bool) -> None:
+        self.slice_pane.setVisible(bool(show))
+        self.simulation_panel.set_mri_pane_checked(bool(show))
+        if show:
+            total = max(800, self.center_splitter.width())
+            self.center_splitter.setSizes([int(total * 0.58), int(total * 0.42)])
+            volume = self.slice_pane.volume
+            axis, _pos = self.viewport.clip_state()
+            if volume is not None and not axis:
+                b = volume.bounds()
+                self.viewport.apply_clip_world("z", (b[4] + b[5]) / 2)
+            self._face_cut(self.viewport.clip_state()[0])
+
+    def _face_cut(self, axis: str) -> None:
+        """Turn the 3D camera to the cut face, as a radiologist views the slice:
+        axial from the feet, coronal from the front, sagittal from the side."""
+        preset = {"z": "inferior", "y": "anterior", "x": "left"}.get(axis)
+        if preset:
+            self.controller.set_view(preset)
+
+    def _on_slice_plane(self, axis: str, position: float) -> None:
+        changed = axis != self.viewport.clip_state()[0]
+        self.viewport.apply_clip_world(axis, position)
+        if changed:
+            self._face_cut(axis)
+
+    def _simulate_mri(self, spacing: float) -> None:
+        if self._mri_worker is not None and self._mri_worker.isRunning():
+            self.status_message("MRI simulation already running…", 3000)
+            return
+        from app.imaging.synthetic_mri import scene_items
+        from app.imaging.worker import MRISimulationWorker
+        self.controller.stop_tour()
+        items = scene_items(self.viewport)
+        self._mri_worker = MRISimulationWorker(items, spacing, parent=self)
+        # Bound methods only: the slots must run on the GUI thread.
+        self._mri_worker.progress.connect(self._on_mri_progress)
+        self._mri_worker.completed.connect(self._on_mri_ready)
+        self._mri_worker.failed.connect(self._on_mri_failed)
+        self.simulation_panel.set_mri_status("Simulating MRI…")
+        self._mri_worker.start()
+
+    def _on_mri_progress(self, percent: int, message: str) -> None:
+        self.simulation_panel.set_mri_status(f"{percent}% · {message}")
+
+    def _on_mri_ready(self, simulator, volume) -> None:
+        self._mri_sim = simulator
+        self.slice_pane.set_sequence("T1")
+        self.slice_pane.set_volume(volume)
+        self.simulation_panel.set_mri_status(
+            f"{volume.modality}. {volume.description}. Simulated for teaching — not patient data.")
+        self._show_mri_pane(True)
+
+    def _on_mri_failed(self, message: str) -> None:
+        self.simulation_panel.set_mri_status(message)
+        self.status_message(message, 6000)
+
+    def _on_mri_sequence(self, sequence: str) -> None:
+        if self._mri_sim is None or self.slice_pane.volume is None or not self.slice_pane.volume.simulated:
+            return
+        offset = self.slice_pane.volume.offset.copy()
+        volume = self._mri_sim.render(sequence)
+        volume.offset = offset
+        self.slice_pane.set_volume(volume)
+
+    def _load_scan(self, path: str) -> None:
+        from app.imaging.worker import ScanLoadWorker
+        self.simulation_panel.set_mri_status(f"Loading {path} …")
+        self._scan_worker = ScanLoadWorker(path, parent=self)
+        self._scan_worker.completed.connect(self._on_scan_loaded)
+        self._scan_worker.failed.connect(self._on_mri_failed)
+        self._scan_worker.start()
+
+    def _on_scan_loaded(self, volume) -> None:
+        from app.imaging.volume import align_to_region, guess_region
+        region = align_to_region(volume, self.viewport, guess_region(volume))
+        self.slice_pane.set_volume(volume)
+        self.simulation_panel.set_mri_status(
+            f"{volume.description}. Placed over: {region} (use Align in the MRI pane to change).")
+        self._show_mri_pane(True)
+
+    def _on_mri_structure_clicked(self, name: str) -> None:
+        hit = self.viewport.locate_structure(name)
+        if hit is None:
+            return
+        layer_id = hit[0]
+        self.controller.select_structure(layer_id, name)
+        if layer_id == "muscles":
+            self.simulation_panel.follow_structure(name)
+
+    def _structure_at_point(self, point) -> str:
+        """Smallest model structure whose bounds contain *point* (real-scan hover)."""
+        best = None
+        for state in self.viewport.layers.values():
+            if not state.visible:
+                continue
+            for name, poly in zip(state.structures, state.polydata):
+                if not name:
+                    continue
+                b = poly.GetBounds()
+                if b[0] <= point[0] <= b[1] and b[2] <= point[1] <= b[3] and b[4] <= point[2] <= b[5]:
+                    size = (b[1] - b[0]) * (b[3] - b[2]) * (b[5] - b[4])
+                    if best is None or size < best[0]:
+                        best = (size, name)
+        return f"≈ {best[1]} (model)" if best else ""
 
     def _update_scene_summary(self) -> None:
         try:

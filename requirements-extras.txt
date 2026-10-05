@@ -33,3 +33,8 @@ imageio-ffmpeg>=0.4.9
 # accelerate>=0.30
 # bitsandbytes>=0.43   # 4-bit / 8-bit quantization for local inference
 # nvidia-ml-py>=12.0   # NVML fallback when nvidia-smi is unavailable
+
+# MRI pairing: read real scans (NIfTI via nibabel, DICOM via pydicom). Optional —
+# the simulated MRI needs neither.
+nibabel>=5.0
+pydicom>=2.4

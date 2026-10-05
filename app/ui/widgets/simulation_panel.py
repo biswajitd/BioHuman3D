@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton,
                              QScrollArea, QVBoxLayout, QWidget)
 
 from app.anatomy.muscles import MOTIONS, MUSCLES, describe, muscle_for_structure
@@ -35,6 +35,9 @@ class SimulationPanel(QWidget):
     motionTourRequested = pyqtSignal(str, str)        # motion id, side
     exportRequested = pyqtSignal(str, str, str)       # kind ("muscle"|"motion"|…), key, side
     stopRequested = pyqtSignal()
+    mriSimulateRequested = pyqtSignal(float)          # voxel size, metres
+    mriLoadRequested = pyqtSignal(str)                # file or DICOM folder
+    mriPaneToggled = pyqtSignal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -52,6 +55,7 @@ class SimulationPanel(QWidget):
         scroll.setWidget(holder)
         outer.addWidget(scroll)
         self.add_section(self._build_muscle_section())
+        self.add_section(self._build_mri_section())
 
     def add_section(self, section: QWidget) -> None:
         self._layout.insertWidget(self._layout.count() - 1, section)
@@ -120,6 +124,66 @@ class SimulationPanel(QWidget):
         section.add_widget(self._rig_note)
         self._refresh_muscle_card()
         return section
+
+    # ---------------------------------------------------------------- MRI
+    def _build_mri_section(self) -> CollapsibleSection:
+        section = CollapsibleSection("Cross-section & MRI", expanded=True)
+        intro = QLabel("Pair every 3D cross-section with the matching MRI slice. Load a real "
+                       "study (NIfTI or a DICOM folder), or simulate T1/T2/PD contrast from the "
+                       "model for teaching. Move the slice in either view; the other follows.")
+        intro.setObjectName("LayerMeta")
+        intro.setWordWrap(True)
+        section.add_widget(intro)
+
+        self._mri_res = QComboBox()
+        for label, size in (("4 mm  (fast)", 0.004), ("3 mm", 0.003), ("2 mm  (detailed, slower)", 0.002)):
+            self._mri_res.addItem(label, size)
+        section.add_layout(_row("Voxel", self._mri_res))
+
+        buttons = QHBoxLayout()
+        simulate = QPushButton("Simulate MRI")
+        simulate.setObjectName("PrimaryButton")
+        simulate.clicked.connect(lambda: self.mriSimulateRequested.emit(float(self._mri_res.currentData())))
+        load_file = ChipButton("Load scan…")
+        load_file.setToolTip("NIfTI (.nii / .nii.gz)")
+        load_file.clicked.connect(self._choose_scan_file)
+        load_dir = ChipButton("DICOM folder…")
+        load_dir.clicked.connect(self._choose_scan_folder)
+        buttons.addWidget(simulate, 1)
+        buttons.addWidget(load_file)
+        buttons.addWidget(load_dir)
+        section.add_layout(buttons)
+
+        self._mri_toggle = QCheckBox("Show paired MRI view")
+        self._mri_toggle.toggled.connect(self.mriPaneToggled)
+        section.add_widget(self._mri_toggle)
+
+        self._mri_status = QLabel("No imaging loaded.")
+        self._mri_status.setObjectName("LayerMeta")
+        self._mri_status.setWordWrap(True)
+        section.add_widget(self._mri_status)
+        return section
+
+    def _choose_scan_file(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Open MRI (NIfTI)", "",
+                                              "NIfTI (*.nii *.nii.gz);;All files (*)")
+        if path:
+            self.mriLoadRequested.emit(path)
+
+    def _choose_scan_folder(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+        path = QFileDialog.getExistingDirectory(self, "Open DICOM series folder")
+        if path:
+            self.mriLoadRequested.emit(path)
+
+    def set_mri_status(self, text: str) -> None:
+        self._mri_status.setText(text)
+
+    def set_mri_pane_checked(self, checked: bool) -> None:
+        blocked = self._mri_toggle.blockSignals(True)
+        self._mri_toggle.setChecked(checked)
+        self._mri_toggle.blockSignals(blocked)
 
     def current_muscle(self) -> str:
         return self._muscle.currentData() or ""

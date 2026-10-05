@@ -111,6 +111,7 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
     cameraChanged = pyqtSignal()
     fpsUpdated = pyqtSignal(float)
     sceneLoaded = pyqtSignal(int, int)       # loaded_layers, placeholder_layers
+    clipMoved = pyqtSignal(str, float)       # axis ("" = cleared), world position (m)
 
     # ---------------------------------------------------------------- setup
     def __init__(self, registry: LayerRegistry, config, parent: Optional[QWidget] = None):
@@ -128,6 +129,14 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         self._highlight_actor = None
         self._highlight_layer: Optional[str] = None
         self._clip_plane = None
+        self._clip_axis = ""
+        self._clip_position = 0.0
+        self._cap_actors: List[object] = []
+        self._caps_enabled = True
+        self._cap_timer = QTimer(self)
+        self._cap_timer.setSingleShot(True)
+        self._cap_timer.setInterval(70)
+        self._cap_timer.timeout.connect(self._update_caps)
         self._explode = 0.0
         self._initialized = False
         self._last_pick_id: Optional[str] = None
@@ -404,6 +413,7 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         self._actor_to_structure.clear()
         self._structure_index.clear()
         self._highlight_cache.clear()
+        self._clear_caps()
         self._clip_plane = None
 
     # ------------------------------------------------------------ structures
@@ -736,12 +746,15 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         lo, hi = bounds[index * 2], bounds[index * 2 + 1]
         lo, hi = min(lo, hi), max(lo, hi)
         position = lo + (hi - lo) * max(0.0, min(1.0, normalized))
+        self.apply_clip_world(axis, position)
 
+    def apply_clip_world(self, axis: str, position: float) -> None:
+        """Slice at an absolute coordinate (metres) — used to follow an MRI slice."""
+        index = {"x": 0, "y": 1, "z": 2}.get(axis, 0)
         normal = [0.0, 0.0, 0.0]
         normal[index] = 1.0
         origin = [0.0, 0.0, 0.0]
-        origin[index] = position
-
+        origin[index] = float(position)
         if self._clip_plane is None:
             self._clip_plane = vtk.vtkPlane()
             for state in self._layers.values():
@@ -749,6 +762,76 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
                     actor.GetMapper().AddClippingPlane(self._clip_plane)
         self._clip_plane.SetNormal(*normal)
         self._clip_plane.SetOrigin(*origin)
+        self._clip_axis, self._clip_position = axis, float(position)
+        self._cap_timer.start()
+        self._render()
+        self.clipMoved.emit(axis, float(position))
+
+    def clip_state(self) -> Tuple[str, float]:
+        return self._clip_axis, self._clip_position
+
+    def set_caps_enabled(self, enabled: bool) -> None:
+        self._caps_enabled = bool(enabled)
+        self._update_caps()
+
+    def _clear_caps(self) -> None:
+        for actor in self._cap_actors:
+            self._renderer.RemoveActor(actor)
+        self._cap_actors = []
+
+    def _update_caps(self) -> None:
+        """Fill the cut with solid cross-section faces, one per sliced structure,
+        so a slice reads like an atlas section instead of hollow shells."""
+        self._clear_caps()
+        if self._clip_plane is None or not self._caps_enabled:
+            self._render()
+            return
+        index = {"x": 0, "y": 1, "z": 2}.get(self._clip_axis, 0)
+        pos = self._clip_position
+        plane = vtk.vtkPlane()
+        plane.SetOrigin(*self._clip_plane.GetOrigin())
+        plane.SetNormal(*self._clip_plane.GetNormal())
+        offset = [0.0, 0.0, 0.0]
+        offset[index] = 0.0006            # sit just on the kept side of the clip
+        for state in self._layers.values():
+            if not state.visible:
+                continue
+            for actor, poly in zip(state.actors, state.polydata):
+                prop = actor.GetProperty()
+                if not actor.GetVisibility() or prop.GetOpacity() < 0.2:
+                    continue
+                b = poly.GetBounds()
+                if not (b[2 * index] <= pos <= b[2 * index + 1]):
+                    continue
+                cutter = vtk.vtkCutter()
+                cutter.SetCutFunction(plane)
+                cutter.SetInputData(poly)
+                fill = vtk.vtkContourTriangulator()
+                fill.SetInputConnection(cutter.GetOutputPort())
+                fill.Update()
+                face = fill.GetOutput()
+                if face is None or not face.GetNumberOfCells():
+                    continue
+                cap_poly = vtk.vtkPolyData()
+                cap_poly.DeepCopy(face)
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputData(cap_poly)
+                mapper.SetScalarVisibility(False)
+                cap = vtk.vtkActor()
+                cap.SetMapper(mapper)
+                cap.SetPosition(*[actor.GetPosition()[k] + offset[k] for k in range(3)])
+                if actor.GetUserMatrix() is not None:
+                    cap.SetUserMatrix(actor.GetUserMatrix())
+                cp = cap.GetProperty()
+                r, g, bcol = prop.GetColor()
+                cp.SetColor(r * 0.86, g * 0.86, bcol * 0.86)
+                cp.SetOpacity(prop.GetOpacity())
+                cp.SetAmbient(0.35)
+                cp.SetDiffuse(0.7)
+                cp.SetSpecular(0.05)
+                cap.SetPickable(False)
+                self._renderer.AddActor(cap)
+                self._cap_actors.append(cap)
         self._render()
 
     def disable_clip_plane(self) -> None:
@@ -759,7 +842,10 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
                 mapper = actor.GetMapper()
                 mapper.RemoveAllClippingPlanes()
         self._clip_plane = None
+        self._clip_axis = ""
+        self._clear_caps()
         self._render()
+        self.clipMoved.emit("", 0.0)
 
     def set_explode(self, factor: float) -> None:
         """Fan layers apart along their registry-defined offset vectors."""
@@ -899,6 +985,9 @@ class PlaceholderViewport(QWidget):
     def snapshot(self, *_a, **_k): return None
     def visible_layers(self): return []
     def clear_scene(self): pass
+    def apply_clip_world(self, *_a, **_k): pass
+    def clip_state(self): return ("", 0.0)
+    def set_caps_enabled(self, *_a): pass
     def structure_for_actor(self, *_a): return ""
     def structure_names(self, *_a, **_k): return []
     def has_structure_names(self): return False
