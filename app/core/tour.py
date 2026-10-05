@@ -63,6 +63,8 @@ class TourEngine(QObject):
         self._to_state: Dict[str, Sequence[float]] = {}
         self._waiting_for_narration = False
         self._paused = False
+        self._effect = None
+        self._effect_time = 0.0
 
         self._timer = QTimer(self)
         self._timer.setInterval(self.TICK_MS)
@@ -101,8 +103,16 @@ class TourEngine(QObject):
         self._timer.start()
         self._advance_to(max(0, min(index, len(self._tour.keyframes) - 1)))
 
+    def _end_effect(self) -> None:
+        if self._effect is not None:
+            try:
+                self._effect.end(self._viewport)
+            finally:
+                self._effect = None
+
     def stop(self) -> None:
         paused = self._paused
+        self._end_effect()
         self._timer.stop()
         self._phase = _Phase.IDLE
         self._index = -1
@@ -140,6 +150,7 @@ class TourEngine(QObject):
     def _advance_to(self, index: int) -> None:
         if self._tour is None:
             return
+        self._end_effect()
         if index >= len(self._tour.keyframes):
             self._phase = _Phase.FINISHED
             self._timer.stop()
@@ -162,8 +173,17 @@ class TourEngine(QObject):
         # -- camera --------------------------------------------------------
         self._from_state = self._viewport.camera_state() or {}
         target = keyframe.camera
+        focus = getattr(keyframe, "focus_structures", None)
+        bounds = None
+        if getattr(keyframe, "focus_bounds", None):
+            bounds = tuple(keyframe.focus_bounds)
+        elif focus and hasattr(self._viewport, "structure_bounds"):
+            bounds = self._viewport.structure_bounds(focus)
         if target:
             self._to_state = dict(target)
+        elif bounds is not None:
+            from app.core.viewport import camera_for_bounds
+            self._to_state = camera_for_bounds(bounds, keyframe.view or "anterior", 1.6)
         elif keyframe.view:
             self._viewport.set_view(keyframe.view)
             self._to_state = self._viewport.camera_state() or self._from_state
@@ -175,6 +195,15 @@ class TourEngine(QObject):
         self._elapsed = 0.0
         self._waiting_for_narration = self._dwell <= 0.0
         self._phase = _Phase.TRAVEL
+
+        effect = getattr(keyframe, "effect", None)
+        if effect is not None:
+            self._effect = effect
+            self._effect_time = 0.0
+            effect.begin(self._viewport)
+            effect.apply(self._viewport, 0.0)
+            # Let at least one full action cycle play even if speech is short.
+            self._dwell = max(self._dwell, float(getattr(effect, "cycle_seconds", 0.0)) - self._travel)
 
         self.keyframeEntered.emit(index, keyframe)
         if not self._timer.isActive():
@@ -189,6 +218,9 @@ class TourEngine(QObject):
             return
 
         self._elapsed += dt
+        if self._effect is not None:
+            self._effect_time += dt
+            self._effect.apply(self._viewport, self._effect_time)
 
         if self._phase is _Phase.TRAVEL:
             raw = min(1.0, self._elapsed / self._travel) if self._travel else 1.0

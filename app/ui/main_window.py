@@ -40,6 +40,7 @@ from app.core.viewport import create_viewport
 from app.ui.widgets.controls import GLYPH, IconButton
 from app.ui.widgets.ai_panel import AIPanel, VIDEO_PRESETS
 from app.ui.widgets.layer_panel import LayerPanel
+from app.ui.widgets.simulation_panel import SimulationPanel
 from app.ui.widgets.viewport_panel import ViewportPanel
 from app.video.exporter import TourVideoExporter, VideoSettings
 from app.video.player import VideoPlayerDialog, open_in_default_player
@@ -271,6 +272,9 @@ class MainWindow(QMainWindow):
         self.layer_panel = LayerPanel(tours)
         self.viewport_panel = ViewportPanel(self.viewport)
         self.ai_panel = AIPanel(tours)
+        self.simulation_panel = SimulationPanel()
+        self.ai_panel.set_simulation_widget(self.simulation_panel)
+        self._rig = None
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(True)
@@ -548,6 +552,13 @@ class MainWindow(QMainWindow):
         ap.videoFolderRequested.connect(self._show_video_in_folder)
         ap.videoOptionsChanged.connect(self._update_video_estimate)
 
+        # -- simulation page ---------------------------------------------------
+        sp = self.simulation_panel
+        sp.muscleTourRequested.connect(self._play_muscle_tour)
+        sp.motionTourRequested.connect(self._play_motion_tour)
+        sp.exportRequested.connect(self._export_simulation)
+        sp.stopRequested.connect(self.controller.stop_tour)
+
         # -- video exporter → panel -------------------------------------------
         self.video.progress.connect(self._on_video_progress)
         self.video.finished.connect(self._on_video_finished)
@@ -756,6 +767,8 @@ class MainWindow(QMainWindow):
             self.controller.clear_selection()
             return
         self.controller.select_structure(layer_id, label)
+        if layer_id == "muscles":
+            self.simulation_panel.follow_structure(label)
         if bool(self.config.get("ui.auto_explain_on_select", False)):
             self.ai_panel.append_user(f"Explain {label}")
             self.ai.explain_selection("brief")
@@ -772,13 +785,57 @@ class MainWindow(QMainWindow):
             self.layer_panel.set_layer_visible(layer_id, bool(value))
 
     def _on_scene_loaded(self, real: int, placeholders: int) -> None:
+        self._rig = None                       # joints are re-estimated lazily
         self.layer_panel.populate(self.registry.specs, self.registry.available_ids())
+        self.simulation_panel.set_rig_status(self.rig() is not None)
         self._update_scene_summary()
         if placeholders and not real:
             self.ai_panel.append_note(
                 "Showing placeholder geometry. Run "
                 "`python tools\\generate_demo_models.py` or drop real anatomy models "
                 "into app/assets/models to replace it.")
+
+    # ============================================================ simulation
+    def rig(self):
+        """Kinematic rig for the loaded scene (``None`` without named limb bones)."""
+        if self._rig is None and getattr(self.viewport, "has_structure_names", lambda: False)():
+            from app.anatomy.kinematics import Rig
+            rig = Rig(self.viewport)
+            self._rig = rig if rig.available else False
+        return self._rig or None
+
+    def _simulation_tour(self, kind: str, key: str, side: str):
+        if kind == "muscle":
+            from app.anatomy.muscle_tours import muscle_tour
+            return muscle_tour(self.viewport, self.rig(), key, side)
+        if kind == "motion":
+            from app.anatomy.muscle_tours import motion_tour
+            return motion_tour(self.viewport, self.rig(), key, side)
+        return None
+
+    def _start_generated_tour(self, tour, group: str) -> None:
+        if tour is None:
+            self.status_message("That simulation is not available for the loaded anatomy.", 5000)
+            return
+        self.ai_panel.add_video_subject(group, tour.title, tour)
+        self.ai_panel.set_cues(tour.cues())
+        self.controller.start_tour(tour.id)
+
+    def _play_muscle_tour(self, key: str, side: str) -> None:
+        self._start_generated_tour(self._simulation_tour("muscle", key, side), "Muscle")
+
+    def _play_motion_tour(self, motion_id: str, side: str) -> None:
+        self._start_generated_tour(self._simulation_tour("motion", motion_id, side), "Motion")
+
+    def _export_simulation(self, kind: str, key: str, side: str) -> None:
+        tour = self._simulation_tour(kind, key, side)
+        if tour is None:
+            self.status_message("That simulation is not available for the loaded anatomy.", 5000)
+            return
+        self.controller.stop_tour()
+        self.ai_panel.add_video_subject(kind.capitalize(), tour.title, tour)
+        self.ai_panel.show_tab("media")
+        self._generate_video(tour.id, self.ai_panel.current_video_preset())
 
     def _update_scene_summary(self) -> None:
         try:

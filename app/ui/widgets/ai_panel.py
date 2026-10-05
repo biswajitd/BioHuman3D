@@ -101,7 +101,8 @@ class AIPanel(QWidget):
         switcher_layout = QHBoxLayout(switcher)
         switcher_layout.setContentsMargins(12, 0, 12, 8)
         self._tabs = SegmentBar(
-            [("assistant", "Assistant"), ("media", "Audio & Video")], current="assistant")
+            [("assistant", "Assistant"), ("media", "Audio & Video"), ("simulate", "Simulate")],
+            current="assistant")
         self._tabs.changed.connect(self._on_tab_changed)
         switcher_layout.addWidget(self._tabs)
         root.addWidget(switcher)
@@ -121,6 +122,12 @@ class AIPanel(QWidget):
             self._build_video_section(),
             self._build_script_section(),
         ]))
+        # Third page: filled by MainWindow with the simulation panel (muscle
+        # actions, disease progression, MRI cross-sections).
+        self._simulate_holder = QWidget()
+        self._simulate_layout = QVBoxLayout(self._simulate_holder)
+        self._simulate_layout.setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._simulate_holder)
         root.addWidget(self._stack, 1)
 
     # ------------------------------------------------------------------ util
@@ -142,8 +149,18 @@ class AIPanel(QWidget):
         scroll.setWidget(holder)
         return scroll
 
+    _PAGES = {"assistant": 0, "media": 1, "simulate": 2}
+
     def _on_tab_changed(self, key: str) -> None:
-        self._stack.setCurrentIndex(0 if key == "assistant" else 1)
+        self._stack.setCurrentIndex(self._PAGES.get(key, 0))
+
+    def set_simulation_widget(self, widget: QWidget) -> None:
+        """Install the simulation page (built by the main window)."""
+        while self._simulate_layout.count():
+            item = self._simulate_layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().setParent(None)
+        self._simulate_layout.addWidget(widget)
 
     def show_tab(self, key: str) -> None:
         self._tabs.set_current(key, emit=False)
@@ -502,6 +519,24 @@ class AIPanel(QWidget):
             return False
         self._video_tour.setCurrentIndex(index)
         return True
+
+    def add_video_subject(self, group: str, label: str, tour) -> None:
+        """Offer a generated tour (muscle action, disease stage …) for export
+        and select it. Re-adding the same id refreshes it."""
+        tour_id = getattr(tour, "id", "")
+        if not tour_id:
+            return
+        self._tours_by_id[tour_id] = tour
+        index = self._video_tour.findData(tour_id)
+        if index < 0:
+            self._video_tour.addItem(f"{group}: {label}", tour_id)
+            index = self._video_tour.count() - 1
+        else:
+            self._video_tour.setItemText(index, f"{group}: {label}")
+        if index == self._video_tour.currentIndex():
+            self._on_video_tour_changed()
+        else:
+            self._video_tour.setCurrentIndex(index)
 
     def video_subject_text(self) -> str:
         return self._video_subject.text()

@@ -133,6 +133,7 @@ class Segment:
     camera_to: Dict = field(default_factory=dict)
     layers_from: Dict[str, float] = field(default_factory=dict)
     layers_to: Dict[str, float] = field(default_factory=dict)
+    effect: Optional[object] = None          # SceneEffect animated during this segment
 
     @property
     def end(self) -> float:
@@ -233,6 +234,7 @@ class TourVideoExporter(QObject):
         self._work_dir: Optional[Path] = None
         self._tour = None
         self._meta: Dict[str, str] = {}
+        self._active_effect = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(0)          # drain as fast as the UI allows
@@ -399,6 +401,9 @@ class TourVideoExporter(QObject):
 
             travel = settings.lead_in if index == 0 else settings.travel_seconds
             duration = max(travel, spoken) + settings.pause_after
+            effect = getattr(keyframe, "effect", None)
+            if effect is not None:          # always show at least one full action cycle
+                duration = max(duration, float(getattr(effect, "cycle_seconds", 0.0)) + 0.3)
 
             layers_to = dict(previous_layers)
             for layer_id, opacity in (getattr(keyframe, "layers", {}) or {}).items():
@@ -420,6 +425,7 @@ class TourVideoExporter(QObject):
                 camera_to=dict(camera_to),
                 layers_from=dict(previous_layers),
                 layers_to=layers_to,
+                effect=effect,
             ))
 
             if clip is not None:
@@ -470,6 +476,13 @@ class TourVideoExporter(QObject):
             focus = self._layer_bounds(keyframe.focus_layer)
             if focus is not None:
                 bounds = focus
+        structures = getattr(keyframe, "focus_structures", None) if keyframe is not None else None
+        explicit = getattr(keyframe, "focus_bounds", None) if keyframe is not None else None
+        if explicit or (structures and hasattr(self._viewport, "structure_bounds")):
+            focus = tuple(explicit) if explicit else self._viewport.structure_bounds(structures)
+            if focus is not None:
+                from app.core.viewport import camera_for_bounds
+                return camera_for_bounds(focus, preset or "anterior", 1.6)
 
         direction, up = VIEW_PRESETS.get(preset, VIEW_PRESETS["isometric"])
         center = ((bounds[0] + bounds[1]) / 2.0,
@@ -581,6 +594,11 @@ class TourVideoExporter(QObject):
             self._ssao_applied = False
 
     def _teardown_renderer(self) -> None:
+        if getattr(self, "_active_effect", None) is not None:
+            try:
+                self._active_effect.end(self._viewport)
+            finally:
+                self._active_effect = None
         if self._renderer is not None and self._render_window is not None:
             try:
                 for state in self._viewport.layers.values():
@@ -628,6 +646,10 @@ class TourVideoExporter(QObject):
         camera = lerp_state(segment.camera_from, segment.camera_to, alpha)
         self._apply_camera(camera)
         self._apply_layers(segment, alpha)
+        if self._frame_in_segment == 0:
+            self._switch_effect(segment.effect)
+        if self._active_effect is not None:
+            self._active_effect.apply(self._viewport, local_time)
 
         if self._caption is not None:
             self._caption.SetText(0, "  " + wrap_caption(segment.narration))
@@ -656,6 +678,13 @@ class TourVideoExporter(QObject):
         if local_time >= segment.duration:
             self._cursor += 1
             self._frame_in_segment = 0
+
+    def _switch_effect(self, effect) -> None:
+        if self._active_effect is not None:
+            self._active_effect.end(self._viewport)
+        self._active_effect = effect
+        if effect is not None:
+            effect.begin(self._viewport)
 
     def _apply_camera(self, state: Dict) -> None:
         camera = self._renderer.GetActiveCamera()

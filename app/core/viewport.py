@@ -80,6 +80,23 @@ BACKGROUNDS: Dict[str, Tuple[Tuple[float, float, float], Tuple[float, float, flo
 }
 
 _GHOST_OPACITY = 0.06
+
+
+def camera_for_bounds(bounds: Sequence[float], preset: str = "isometric",
+                      distance_factor: float = 1.75) -> Dict[str, List[float]]:
+    """Camera state framing *bounds* from a view preset (used by tours and export)."""
+    direction, up = VIEW_PRESETS.get(preset or "isometric", VIEW_PRESETS["isometric"])
+    center = [(bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0,
+              (bounds[4] + bounds[5]) / 2.0]
+    diagonal = math.dist((bounds[0], bounds[2], bounds[4]), (bounds[1], bounds[3], bounds[5])) or 1.0
+    # Small structures still get some context, and the lower third of the frame
+    # is reserved for captions, so frame a little wider and look slightly low.
+    diagonal = max(diagonal, 0.42)
+    distance = diagonal * distance_factor
+    center[2] -= diagonal * 0.12
+    norm = math.sqrt(sum(c * c for c in direction)) or 1.0
+    return {"position": [center[i] + direction[i] / norm * distance for i in range(3)],
+            "focal": center, "up": list(up), "angle": 30.0}
 _HUGE_MESH_CELLS = 300_000     # above this we use a cheap bounding-box highlight
 
 

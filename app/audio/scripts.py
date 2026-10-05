@@ -35,6 +35,9 @@ class TourKeyframe:
     travel_seconds: float = 1.8
     dwell_seconds: float = 0.0                                # 0 = derive from speech
     focus_layer: str = ""                                     # camera re-frame target
+    focus_structures: List[str] = field(default_factory=list) # frame these named structures
+    focus_bounds: Optional[Sequence[float]] = None            # explicit framing box (motion envelope)
+    effect: Optional[object] = None                           # SceneEffect animated in this beat
 
 
 @dataclass
@@ -1100,9 +1103,20 @@ def video_subjects() -> List[tuple]:
     return subjects
 
 
+#: Tours generated at runtime (muscle actions, disease simulations, translated
+#: copies). They behave exactly like built-in tours for playback and export.
+DYNAMIC_TOURS: Dict[str, Tour] = {}
+
+
+def register_tour(tour: Tour) -> Tour:
+    """Make a generated tour addressable by id (replaces an older version)."""
+    DYNAMIC_TOURS[tour.id] = tour
+    return tour
+
+
 def get_tour(tour_id: str) -> Optional[Tour]:
     """Look up a tour by id. Returns ``None`` for an unknown id."""
-    return BUILTIN_TOURS.get(tour_id)
+    return BUILTIN_TOURS.get(tour_id) or DYNAMIC_TOURS.get(tour_id)
 
 
 def tour_for_system(label: str) -> Optional[Tour]:
