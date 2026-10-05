@@ -9,6 +9,7 @@ REM      run.bat models     (re)generate placeholder anatomy
 REM      run.bat test       run the headless UI smoke test
 REM      run.bat check      verify everything without launching the GUI
 REM      run.bat setup      create/refresh the .venv and install dependencies
+REM      run.bat anatomy    download and install BodyParts3D anatomy
 REM
 REM  Dependencies are installed in two tiers:
 REM    requirements.txt        CORE   - must succeed, or the app cannot start
@@ -183,6 +184,15 @@ if /i "%MODE%"=="models" (
     echo [5/6] Mode       : regenerate models
     echo.
     %PYEXE% tools\generate_demo_models.py --force
+    echo.
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+if /i "%MODE%"=="anatomy" (
+    echo [5/6] Mode       : install BodyParts3D anatomy
+    echo.
+    %PYEXE% tools\fetch_anatomy.py
     echo.
     pause
     exit /b %ERRORLEVEL%

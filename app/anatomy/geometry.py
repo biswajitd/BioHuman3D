@@ -43,7 +43,7 @@ def polydata_from_arrays(points: np.ndarray, triangles: np.ndarray):
     tris = np.ascontiguousarray(triangles, dtype=np.int64)
     cells = np.hstack([np.full((len(tris), 1), 3, dtype=np.int64), tris]).ravel()
     cell_array = vtk.vtkCellArray()
-    cell_array.SetCells(len(tris), numpy_to_vtkIdTypeArray(cells, deep=True))
+    cell_array.ImportLegacyFormat(numpy_to_vtkIdTypeArray(cells, deep=True))
     poly.SetPolys(cell_array)
     return poly
 

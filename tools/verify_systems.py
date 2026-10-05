@@ -128,19 +128,25 @@ male_indian = filter_voices(voices, "en-IN", "male")
 print(f"  en-IN female -> {len(female_indian)}", flush=True)
 print(f"  en-IN male   -> {len(male_indian)}", flush=True)
 
-resolved, note = resolve_voice(voices, "en-IN", "female")
-check("Dialect/gender resolution returns a voice", resolved is not None,
-      resolved.display if resolved else "none")
-check("Missing dialect is reported, not hidden",
-      "India" in note and "Falling back" in note,
-      note[:110] if note else "no note (a matching voice exists)")
-check("Fallback honours the requested gender", resolved is not None
-      and resolved.gender == "female",
-      f"asked for Indian English female, got {resolved.display}")
+if not voices:
+    # No SAPI voices on this machine (e.g. Linux CI). Offline voice resolution
+    # cannot be exercised; neural voices are the default narration engine.
+    print("  [SKIP] system-voice resolution — no offline voices installed on this machine", flush=True)
+else:
+    resolved, note = resolve_voice(voices, "en-IN", "female")
+    check("Dialect/gender resolution returns a voice", resolved is not None,
+          resolved.display if resolved else "none")
+    if resolved is not None and resolved.dialect != "en-IN":
+        check("Missing dialect is reported, not hidden",
+              "India" in note and "Falling back" in note,
+              note[:110] if note else "no note (a matching voice exists)")
+    check("Fallback honours the requested gender", resolved is not None
+          and resolved.gender == "female",
+          f"asked for Indian English female, got {resolved.display if resolved else 'none'}")
 
-any_resolved, any_note = resolve_voice(voices, "any", "female")
-check("Gender-only filter works", any_resolved is not None,
-      any_resolved.display if any_resolved else "none")
+    any_resolved, any_note = resolve_voice(voices, "any", "female")
+    check("Gender-only filter works", any_resolved is not None,
+          any_resolved.display if any_resolved else "none")
 
 check("Dialect list includes Indian English", any(d.code == "en-IN" for d in DIALECTS))
 

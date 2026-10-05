@@ -319,6 +319,53 @@ def main() -> int:
             expect("Settings dialog constructs", dialog is not None)
             dialog.reject()
 
+            # -- structure-level anatomy ------------------------------------------
+            vp = window.viewport
+            names = vp.structure_names() if hasattr(vp, "structure_names") else []
+            expect("Named structures loaded", len(names) > 100, f"{len(names)} structures")
+            expect("Structure lookup", vp.locate_structure("Right humerus") is not None)
+
+            # -- simulate tab: muscle action ---------------------------------------
+            window.ai_panel.show_tab("simulate")
+            rig = window.rig()
+            expect("Kinematic rig built", rig is not None and len(rig.limbs) == 4,
+                   f"{len(rig.limbs) if rig else 0} limbs")
+            from app.anatomy.muscle_tours import muscle_tour
+            tour = muscle_tour(vp, rig, "biceps brachii", "right")
+            expect("Muscle action tour", tour is not None and len(tour.keyframes) >= 3,
+                   f"{len(tour.keyframes) if tour else 0} beats")
+            effect = tour.keyframes[2].effect if tour else None
+            if effect is not None:
+                before = vp.structure_bounds(["Right radius"])
+                effect.begin(vp)
+                effect.apply(vp, 2.6)
+                after = vp.structure_bounds(["Right radius"])
+                effect.end(vp)
+                restored = vp.structure_bounds(["Right radius"])
+                expect("Elbow flexion raises the forearm", after[4] > before[4] + 0.05,
+                       f"radius bottom {before[4]:.2f} → {after[4]:.2f} m")
+                expect("Pose resets to anatomical position",
+                       abs(restored[4] - before[4]) < 1e-6)
+
+            # -- disease stage --------------------------------------------------------
+            kidney = vp.structure_bounds(["Right kidney"])
+            window._on_disease_stage("ckd", 4)
+            shrunk = vp.structure_bounds(["Right kidney"])
+            window._reset_disease()
+            expect("CKD G5 shrinks the kidney", (shrunk[5] - shrunk[4]) < 0.85 * (kidney[5] - kidney[4]))
+
+            # -- cross-section caps + MRI pane ------------------------------------------
+            vp.apply_clip_world("z", 1.30)
+            vp._update_caps()
+            expect("Cross-section faces filled", len(vp._cap_actors) > 10, f"{len(vp._cap_actors)} caps")
+            vp.disable_clip_plane()
+
+            # -- narration languages ------------------------------------------------------
+            options = window.audio.dialect_options()
+            codes = [code for code, _ in options if code]
+            expect("Narration languages offered", {"en-IN", "hi-IN", "bn-IN", "ta-IN", "fr-FR"} <= set(codes),
+                   f"{len(codes)} languages")
+
             # -- screenshot ----------------------------------------------------------
             if not args.no_capture:
                 target_path = args.out or (config.paths.user_data / "screenshots"

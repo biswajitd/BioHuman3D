@@ -172,7 +172,7 @@ def split_structures(poly, fallback_name: str = "") -> List[Named]:
         cells = np.hstack([np.full((len(faces), 1), 3, dtype=np.int64),
                            inverse.reshape(-1, 3)]).ravel()
         ca = vtk.vtkCellArray()
-        ca.SetCells(len(faces), numpy_to_vtkIdTypeArray(np.ascontiguousarray(cells), deep=True))
+        ca.ImportLegacyFormat(numpy_to_vtkIdTypeArray(np.ascontiguousarray(cells), deep=True))
         piece.SetPolys(ca)
         if normals is not None:
             n = numpy_to_vtk(np.ascontiguousarray(normals[used]), deep=True)

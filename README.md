@@ -20,6 +20,7 @@ run.bat            :: launch
 run.bat doctor     :: diagnose environment (GPU, local LLMs, audio)
 run.bat check      :: verify everything without launching
 run.bat setup      :: create/refresh .venv and install dependencies
+run.bat anatomy    :: download and install BodyParts3D (scan-derived anatomy)
 ```
 
 Or do it manually:
@@ -36,48 +37,42 @@ python tools\generate_demo_models.py         # placeholder anatomy (recommended)
 python main.py
 ```
 
-## Visual quality and real anatomy data
+## Anatomy: reference body and real atlas data
 
-**Read this if the renders look "not realistic enough".**
+**Out of the box** the app builds a *reference body* on first launch (about 3 s):
+400 individually named structures — every vertebra and rib, long bones with
+epiphyses, ~90 muscles placed between their real origins and insertions,
+named arteries, veins, nerves and organs — proportioned with the Drillis &
+Contini anthropometric ratios for a 1.75 m adult. Click any structure to get
+its name; isolate, highlight, slice and animate it individually.
 
-The app ships with **procedural placeholder geometry** — ellipsoids and tubes
-arranged in a rough anatomical stack. It exists so the viewer, tours, picking,
-isolation and export all work out of the box. It is *not* a substitute for real
-anatomical data, and no amount of rendering work will make a sphere look like a
-liver. Photoreal anatomy comes from real mesh data.
-
-**What was improved in the renderer itself** (all of which also lift real data):
-
-| Change | Effect |
-|---|---|
-| 2× supersampling on export (renders 4K to output 1080p, then box-filtered down) | Clean, properly anti-aliased silhouettes |
-| Screen-space ambient occlusion (`vtkSSAOPass`) | Contact shadows in creases and between organs — surfaces read as solid, not flat |
-| Three-point lighting rig + rim light | Form and depth instead of flat headlight shading |
-| Doubled mesh resolution in the demo generator (40–48 → 64–96) | Smooth silhouettes on close-ups |
-| `-preset slow` + `+faststart` encoding | Better compression at equal quality, streamable output |
-
-Toggle **Ultra** in the export card to control supersampling + occlusion.
-
-**To get production realism, import a real dataset:**
+It is still a *schematic* model. **For scan-derived anatomy, install
+BodyParts3D** (≈1,500 named parts from a full-body MRI, CC BY 4.0) with one
+command:
 
 ```powershell
-# 1. see how a dataset would be sorted, without changing anything
-python tools\import_anatomy.py D:\anatomy\BodyParts3D --dry-run
-
-# 2. merge each body system into one .vtp the app can load
-python tools\import_anatomy.py D:\anatomy\BodyParts3D
+run.bat anatomy                     :: or: python tools\fetch_anatomy.py
+python tools\fetch_anatomy.py --restore-reference    :: back to the reference body
 ```
 
-The importer assigns every mesh to a layer by matching its name against ordered
-keyword rules ("aortic valve" → `heart`, not `arteries`), merges each system into
-a single file, and reports anything it could not classify rather than guessing.
-Datasets that use opaque ids (FMA/TA codes) are handled with a name table —
-supply `--map id,name.csv`, or drop a two-column `.tsv` in the folder.
+The fetcher downloads the archive and name table (cached), names and sorts
+every mesh into its body-system layer, converts millimetres to metres, orients
+it (Z up, anterior −Y, patient's right −X) and writes one structure-labelled
+file per layer. Muscle actions, disease simulation and MRI pairing then run on
+the real meshes unchanged. If your network blocks the download, fetch the files
+in a browser from the BodyParts3D download page and pass them with `--zip`
+and `--table`.
 
-Verify the pipeline works before converting anything:
+**Renderer quality** (applies to both): 2× supersampling on export, screen-space
+ambient occlusion, three-point lighting with rim light, `-preset slow` H.264.
+Cross-sections are rendered with **solid cut faces** for every sliced structure.
+
+To import any other dataset (OBJ/STL/PLY/GLB/VTP folder):
 
 ```powershell
-python tools\import_anatomy.py --self-test     # builds a labelled dataset and imports it
+python tools\import_anatomy.py D:\anatomy\MyAtlas --dry-run
+python tools\import_anatomy.py D:\anatomy\MyAtlas
+python tools\import_anatomy.py --self-test
 ```
 
 ### Free, commercially usable anatomy datasets
@@ -177,23 +172,40 @@ Verify it yourself:
 python tools\verify_systems.py      # 21 checks: scripts, audio distinctness, voices, export
 ```
 
-### Voice: dialect × gender
+### Voice and language
 
-Right panel → **Audio & Video** → *Voice & Narration*. Choose a **Dialect** and a
-**Voice** (Female / Male / Any); the exact installed voice is then resolved and
-named in the panel.
+Right panel → **Audio & Video** → *Voice & Narration*:
 
-> **Important — Indian English is not installed on this PC by default.**
-> Windows ships `en-US` only (David, Zira) unless the Speech feature for India is
-> added. BioHuman3D does **not** silently pass off a US voice as Indian English:
-> it reports the gap, falls back to a voice matching your requested *gender*, and
-> offers setup instructions. `run.bat doctor` reports the same.
->
-> To add Indian English: **Settings → Time & Language → Language & region →**
-> **Add a language → English (India) → tick "Speech"**, then restart the app.
-> Windows then provides *Heera* (female) and *Ravi* (male).
-> For regional Indian accents without a language pack, configure an ElevenLabs
-> key — its multilingual voices expose accent/gender labels and are fetched live.
+| Control | Choices |
+|---|---|
+| **Engine** | Microsoft neural voices (free, online — default) · Azure AI Speech (your key) · Google Cloud TTS (your key) · ElevenLabs multilingual · offline system voices · silent |
+| **Language** | 11 English dialects (India first, then UK, US, Australia, Canada, Ireland, South Africa, New Zealand, Singapore, Nigeria, Kenya) · 13 Indian languages (Hindi, Bengali, Tamil, Telugu, Marathi, Gujarati, Kannada, Malayalam, Odia, Punjabi, Assamese, Urdu, Nepali) · 24 international languages |
+| **Voice** | Female / Male — every language has both |
+
+Neural voices are natural, human-like voices (e.g. Indian English *Neerja* /
+*Prabhat*, Hindi *Swara* / *Madhur*, Tamil *Pallavi* / *Valluvar*). Audio is
+cached, shared by live narration and video export, and falls back to the
+offline system voice automatically when there is no internet.
+
+* **Free neural voices** need `pip install edge-tts` (in `requirements-extras.txt`)
+  and an internet connection. They use Microsoft's Edge read-aloud service and
+  are intended for personal/evaluation use — for a product, add an **Azure
+  Speech** key and region in Settings (same voices, licensed for production).
+* **Google Cloud TTS** picks the best voice per language and gender from
+  Google's live catalogue (Chirp3-HD → Neural2 → WaveNet).
+
+**Narration in other languages is translated first**, then spoken. The
+translation engine is chosen in Settings: your configured AI model (local
+Ollama/LM Studio or OpenAI/Anthropic — prompted for standard medical
+terminology), Google Cloud Translation, or Azure Translator. Every translated
+sentence is stored in `%LOCALAPPDATA%\BioHuman3D\translations\<language>.json`
+with its English source. **Have a clinician or medical translator review that
+file**: set `"reviewed": true` on corrected entries and they are never
+overwritten.
+
+Video captions are drawn with Qt's text engine, so Devanagari, Bengali, Tamil
+and the other Indic scripts are shaped correctly and Urdu/Arabic run
+right-to-left. Captions advance sentence by sentence with the speech.
 
 ### Narrated tour video (MP4)
 
@@ -213,6 +225,47 @@ into the file, and the player opens automatically when it finishes.
 
 The right panel is **tabbed** (*Assistant* / *Audio & Video*) rather than one long
 column, so every control stays reachable on a laptop-height display.
+
+---
+
+## Simulate tab: muscle actions, disease progression, MRI pairing
+
+### Muscle actions
+Pick any of 45 muscles (or click one in 3D) and press **Play action**. The
+joint moves through the muscle's real actions — e.g. biceps brachii:
+supination, elbow flexion, shoulder flexion — with the agonist glowing and
+thickening as it shortens, synergists amber and antagonists blue. Narration
+gives origin, insertion, innervation with root levels, normal range of motion
+(AAOS) and a clinical note (Gray's / Moore's). **Animate motion** shows every
+agonist and antagonist of one joint motion. Joint centres are estimated from the
+bones, so this works on imported atlases too. **Export video** renders it to MP4.
+
+### Disease simulation
+Eight conditions, each staged with the system clinicians use and morphing the
+anatomy stage by stage:
+
+| Condition | Staging |
+|---|---|
+| Coronary artery disease → myocardial infarction | AHA lesion types; 4th Universal Definition of MI |
+| Fatty liver disease → cirrhosis (MASLD) | Steatosis → MASH → fibrosis F0–F4 (METAVIR) |
+| Chronic kidney disease | KDIGO G1–G5 |
+| COPD / emphysema | GOLD 1–4 |
+| Ischaemic stroke (left MCA) | Hyperacute → acute → chronic |
+| Knee osteoarthritis | Kellgren–Lawrence 0–4 |
+| Osteoporosis with vertebral fracture | WHO T-score categories |
+| Hypertension with LV hypertrophy | ACC/AHA 2017 |
+
+Use the **Stage** slider to inspect a stage, **Play progression** for a narrated
+tour, **Export video** for MP4. Each stage states its defining criteria and the
+guideline it follows. These are educational simulations, not diagnoses.
+
+### Cross-sections paired with MRI
+**Simulate MRI** (T1 / T2 / PD) builds an MRI-like study from the model, or
+**Load scan…** opens a real NIfTI file or DICOM folder (`pip install nibabel
+pydicom`). The paired view sits beside the 3D view; moving the cut in either one
+moves the other. Slices follow radiological convention (axial viewed from the
+feet), hovering names the structure, clicking selects it in 3D, and *Labels*
+outlines every structure. Simulated studies are always marked **SIMULATED**.
 
 ---
 
@@ -270,9 +323,17 @@ main.py                    entry point
 app/config.py              paths + persisted settings
 app/core/                  viewport, registry, tours, VTK helpers
 app/ai/                    detection, providers, prompts, manager
-app/audio/                 TTS engine + authored tour scripts
-app/ui/                    shell, theme, QSS, panels
-tools/generate_demo_models.py
+app/anatomy/               reference body, structure files, atlas frame,
+                           muscle knowledge base, kinematic rig, muscle tours
+app/disease/               condition catalogue, stage effects, progression tours
+app/imaging/               MRI volumes (NIfTI/DICOM), MRI simulator, paired slice pane
+app/audio/                 languages, neural TTS, system TTS, authored tour scripts
+app/i18n/                  narration translation + translation memory
+app/video/                 exporter, narration synthesis, Qt captions
+app/ui/                    shell, theme, QSS, panels, simulation page
+tools/generate_demo_models.py   reference body
+tools/fetch_anatomy.py          download + install BodyParts3D
+tests/                          pytest unit tests
 ```
 
 ---
