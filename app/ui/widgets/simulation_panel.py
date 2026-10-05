@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton,
-                             QScrollArea, QVBoxLayout, QWidget)
+                             QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 from app.anatomy.muscles import MOTIONS, MUSCLES, describe, muscle_for_structure
 from app.ui.widgets.collapsible import CollapsibleSection
@@ -35,6 +35,9 @@ class SimulationPanel(QWidget):
     motionTourRequested = pyqtSignal(str, str)        # motion id, side
     exportRequested = pyqtSignal(str, str, str)       # kind ("muscle"|"motion"|…), key, side
     stopRequested = pyqtSignal()
+    diseaseStageRequested = pyqtSignal(str, int)      # condition id, stage index
+    diseaseTourRequested = pyqtSignal(str)
+    diseaseResetRequested = pyqtSignal()
     mriSimulateRequested = pyqtSignal(float)          # voxel size, metres
     mriLoadRequested = pyqtSignal(str)                # file or DICOM folder
     mriPaneToggled = pyqtSignal(bool)
@@ -54,6 +57,7 @@ class SimulationPanel(QWidget):
         self._layout.addStretch(1)
         scroll.setWidget(holder)
         outer.addWidget(scroll)
+        self.add_section(self._build_disease_section())
         self.add_section(self._build_muscle_section())
         self.add_section(self._build_mri_section())
 
@@ -124,6 +128,94 @@ class SimulationPanel(QWidget):
         section.add_widget(self._rig_note)
         self._refresh_muscle_card()
         return section
+
+    # ------------------------------------------------------------ disease
+    def _build_disease_section(self) -> CollapsibleSection:
+        from app.disease.catalog import CONDITIONS
+        section = CollapsibleSection("Disease Simulation", expanded=True)
+        intro = QLabel("Step through a condition's stages, staged with the system clinicians use "
+                       "(KDIGO, GOLD, Kellgren–Lawrence, METAVIR …). Educational — not a diagnosis.")
+        intro.setObjectName("LayerMeta")
+        intro.setWordWrap(True)
+        section.add_widget(intro)
+
+        self._condition = QComboBox()
+        for condition in CONDITIONS:
+            self._condition.addItem(f"{condition.system} · {condition.name}", condition.id)
+        self._condition.currentIndexChanged.connect(self._on_condition_changed)
+        section.add_layout(_row("Condition", self._condition))
+
+        self._stage = QSlider(Qt.Orientation.Horizontal)
+        self._stage.setPageStep(1)
+        self._stage.valueChanged.connect(self._on_stage_changed)
+        section.add_layout(_row("Stage", self._stage))
+
+        self._stage_label = QLabel("")
+        self._stage_label.setObjectName("LayerMeta")
+        self._stage_label.setWordWrap(True)
+        section.add_widget(self._stage_label)
+
+        buttons = QHBoxLayout()
+        play = QPushButton("▶  Play progression")
+        play.setObjectName("PrimaryButton")
+        play.clicked.connect(lambda: self.diseaseTourRequested.emit(self.current_condition()))
+        export = ChipButton("Export video")
+        export.clicked.connect(lambda: self.exportRequested.emit("disease", self.current_condition(), ""))
+        reset = ChipButton("Healthy")
+        reset.setToolTip("Return the anatomy to its healthy state")
+        reset.clicked.connect(self._reset_disease)
+        buttons.addWidget(play, 1)
+        buttons.addWidget(export)
+        buttons.addWidget(reset)
+        section.add_layout(buttons)
+
+        self._condition_info = QLabel("")
+        self._condition_info.setObjectName("LayerMeta")
+        self._condition_info.setWordWrap(True)
+        self._condition_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        section.add_widget(self._condition_info)
+        self._on_condition_changed(emit=False)
+        return section
+
+    def current_condition(self) -> str:
+        return self._condition.currentData() or ""
+
+    def _condition_obj(self):
+        from app.disease.catalog import CONDITION_BY_ID
+        return CONDITION_BY_ID.get(self.current_condition())
+
+    def _on_condition_changed(self, *_args, emit: bool = True) -> None:
+        condition = self._condition_obj()
+        if condition is None:
+            return
+        blocked = self._stage.blockSignals(True)
+        self._stage.setRange(0, len(condition.stages) - 1)
+        self._stage.setValue(0)
+        self._stage.blockSignals(blocked)
+        self._condition_info.setText(f"{condition.summary}\n\nStaging: {condition.staging}\n"
+                                     f"Sources: " + "; ".join(condition.sources))
+        self._show_stage_text(0)
+        if emit:
+            self.diseaseStageRequested.emit(condition.id, 0)
+
+    def _on_stage_changed(self, value: int) -> None:
+        self._show_stage_text(value)
+        self.diseaseStageRequested.emit(self.current_condition(), int(value))
+
+    def _show_stage_text(self, index: int) -> None:
+        condition = self._condition_obj()
+        if condition is None:
+            return
+        stage = condition.stages[index]
+        self._stage_label.setText(f"<b>{stage.label} — {stage.title}</b><br>{stage.criteria}<br>"
+                                  f"<span>{stage.narration}</span>")
+
+    def _reset_disease(self) -> None:
+        blocked = self._stage.blockSignals(True)
+        self._stage.setValue(0)
+        self._stage.blockSignals(blocked)
+        self._show_stage_text(0)
+        self.diseaseResetRequested.emit()
 
     # ---------------------------------------------------------------- MRI
     def _build_mri_section(self) -> CollapsibleSection:

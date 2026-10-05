@@ -132,6 +132,7 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         self._clip_axis = ""
         self._clip_position = 0.0
         self._cap_actors: List[object] = []
+        self.overlay_actors: List[object] = []   # lesions etc.; mirrored by the exporter
         self._caps_enabled = True
         self._cap_timer = QTimer(self)
         self._cap_timer.setSingleShot(True)
@@ -770,6 +771,20 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
     def clip_state(self) -> Tuple[str, float]:
         return self._clip_axis, self._clip_position
 
+    # ------------------------------------------------------------ overlays
+    def add_overlay(self, actor) -> None:
+        """Extra actor (focal lesion, marker) drawn with the scene and in exports."""
+        if actor not in self.overlay_actors:
+            self.overlay_actors.append(actor)
+            if self._clip_plane is not None:
+                actor.GetMapper().AddClippingPlane(self._clip_plane)
+            self._renderer.AddActor(actor)
+
+    def remove_overlay(self, actor) -> None:
+        if actor in self.overlay_actors:
+            self.overlay_actors.remove(actor)
+            self._renderer.RemoveActor(actor)
+
     def set_caps_enabled(self, enabled: bool) -> None:
         self._caps_enabled = bool(enabled)
         self._update_caps()
@@ -890,6 +905,11 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
 
     # ------------------------------------------------------------- internal
     def _render(self) -> None:
+        # While a video export drives the shared actors frame-by-frame, the live
+        # window must not re-render on every scene change (it would double the
+        # cost of each frame, or worse on software OpenGL).
+        if getattr(self, "render_suspended", False):
+            return
         self._render_window.Render()
 
     def _sample_fps(self) -> None:
@@ -987,6 +1007,9 @@ class PlaceholderViewport(QWidget):
     def clear_scene(self): pass
     def apply_clip_world(self, *_a, **_k): pass
     def clip_state(self): return ("", 0.0)
+    overlay_actors: list = []
+    def add_overlay(self, *_a): pass
+    def remove_overlay(self, *_a): pass
     def set_caps_enabled(self, *_a): pass
     def structure_for_actor(self, *_a): return ""
     def structure_names(self, *_a, **_k): return []

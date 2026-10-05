@@ -330,6 +330,9 @@ class MainWindow(QMainWindow):
         self._mri_worker = None
         self._translation_worker = None
         self._pending_localization = None
+        self._disease_scene = None
+        self._disease_isolation = None
+        self._disease_condition = ""
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
@@ -610,6 +613,9 @@ class MainWindow(QMainWindow):
         self.translator = Translator(self.config, self.ai)
         self.controller.tour_resolver = lambda tour: self._localize(
             tour, lambda local: self.controller.start_tour(local.id))
+        sp.diseaseStageRequested.connect(self._on_disease_stage)
+        sp.diseaseTourRequested.connect(self._play_disease_tour)
+        sp.diseaseResetRequested.connect(self._reset_disease)
         sp.mriSimulateRequested.connect(self._simulate_mri)
         sp.mriLoadRequested.connect(self._load_scan)
         sp.mriPaneToggled.connect(self._show_mri_pane)
@@ -848,6 +854,7 @@ class MainWindow(QMainWindow):
 
     def _on_scene_loaded(self, real: int, placeholders: int) -> None:
         self._rig = None                       # joints are re-estimated lazily
+        self._disease_scene = None             # baselines belong to the old meshes
         self.layer_panel.populate(self.registry.specs, self.registry.available_ids())
         self.simulation_panel.set_rig_status(self.rig() is not None)
         self._update_scene_summary()
@@ -873,7 +880,60 @@ class MainWindow(QMainWindow):
         if kind == "motion":
             from app.anatomy.muscle_tours import motion_tour
             return motion_tour(self.viewport, self.rig(), key, side)
+        if kind == "disease":
+            from app.disease.tours import disease_tour
+            self._reset_disease()
+            return disease_tour(self.viewport, self.disease_scene(), key)
         return None
+
+    # ------------------------------------------------------------ disease
+    def disease_scene(self):
+        if self._disease_scene is None:
+            from app.disease.effects import DiseaseScene
+            self._disease_scene = DiseaseScene(self.viewport)
+        return self._disease_scene
+
+    def _on_disease_stage(self, condition_id: str, index: int) -> None:
+        """Show one stage statically (the Stage slider)."""
+        from app.core.effects import IsolateStructuresEffect
+        from app.disease.catalog import CONDITION_BY_ID
+        from app.disease.effects import blend_stages
+        from app.disease.tours import _layers, involved
+        condition = CONDITION_BY_ID.get(condition_id)
+        if condition is None:
+            return
+        self.controller.stop_tour()
+        scene = self.disease_scene()
+        if condition_id != self._disease_condition:
+            self._reset_disease()
+            self._disease_condition = condition_id
+            for layer_id, opacity in _layers(condition).items():
+                self.controller.set_layer_visible(layer_id, opacity > 0)
+                if opacity > 0:
+                    self.controller.set_layer_opacity(layer_id, opacity)
+            names = involved(scene, condition)
+            if condition.isolate:
+                self._disease_isolation = IsolateStructuresEffect(names, ghost=0.10, context_layers=())
+                self._disease_isolation.begin(self.viewport)
+                self._disease_isolation.apply(self.viewport, 0.0)
+            focus = scene.matching(condition.focus)
+            if focus:
+                self.controller.set_view(condition.view)
+                self.viewport.focus_structures(focus)
+        scene.apply(blend_stages(condition, index, index, 1.0))
+        stage = condition.stages[index]
+        self.status_message(f"{condition.name}: {stage.label} — {stage.title}", 6000)
+
+    def _play_disease_tour(self, condition_id: str) -> None:
+        self._start_generated_tour(self._simulation_tour("disease", condition_id, ""), "Disease")
+
+    def _reset_disease(self) -> None:
+        if self._disease_isolation is not None:
+            self._disease_isolation.end(self.viewport)
+            self._disease_isolation = None
+        if self._disease_scene is not None:
+            self._disease_scene.reset()
+        self._disease_condition = ""
 
     def _start_generated_tour(self, tour, group: str) -> None:
         if tour is None:

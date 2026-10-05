@@ -526,6 +526,7 @@ class TourVideoExporter(QObject):
         and downsamples on capture, so edges are properly anti-aliased.
         """
         width, height = self._settings.render_dimensions()
+        self._viewport.render_suspended = True
 
         self._render_window = vtk.vtkRenderWindow()
         self._render_window.SetOffScreenRendering(True)
@@ -610,12 +611,20 @@ class TourVideoExporter(QObject):
                 for state in self._viewport.layers.values():
                     for actor in state.actors:
                         self._renderer.RemoveActor(actor)
+                for actor in getattr(self, "_overlay_actors", []):
+                    self._renderer.RemoveActor(actor)
+                self._overlay_actors = []
                 self._render_window.RemoveRenderer(self._renderer)
                 self._render_window.Finalize()
             except Exception:
                 pass
         self._renderer = None
         self._render_window = None
+        if getattr(self._viewport, "render_suspended", False):
+            self._viewport.render_suspended = False
+            render = getattr(self._viewport, "_render", None)
+            if render is not None:
+                render()
 
     # -------------------------------------------------------------- frames
     def _render_batch(self) -> None:
@@ -657,6 +666,7 @@ class TourVideoExporter(QObject):
         if self._active_effect is not None:
             self._active_effect.apply(self._viewport, local_time)
 
+        self._sync_overlays()
         frame = self._capture()
         if frame is not None and self._overlay is not None:
             caption = ""
@@ -685,6 +695,18 @@ class TourVideoExporter(QObject):
         if local_time >= segment.duration:
             self._cursor += 1
             self._frame_in_segment = 0
+
+    def _sync_overlays(self) -> None:
+        """Mirror the viewport's overlay actors (lesions) into the export renderer."""
+        wanted = list(getattr(self._viewport, "overlay_actors", []))
+        current = getattr(self, "_overlay_actors", [])
+        for actor in current:
+            if actor not in wanted:
+                self._renderer.RemoveActor(actor)
+        for actor in wanted:
+            if actor not in current:
+                self._renderer.AddActor(actor)
+        self._overlay_actors = wanted
 
     def _switch_effect(self, effect) -> None:
         if self._active_effect is not None:
