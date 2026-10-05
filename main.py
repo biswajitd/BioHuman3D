@@ -42,6 +42,35 @@ def _set_windows_app_id() -> None:
         pass
 
 
+def _ensure_reference_anatomy(models_dir: Path) -> None:
+    """Build the procedural reference body on first launch (~3 s).
+
+    Model files are generated rather than committed, so a fresh checkout always
+    gets the current reference body. Imported atlas data is never overwritten:
+    only missing layer files are written.
+    """
+    try:
+        from app.anatomy.procedural_body import BUILDERS
+        from app.anatomy.structures import write_structures
+        from app.core.model_registry import ANATOMY_LAYERS
+    except Exception:
+        return                      # VTK missing: the viewport explains why
+    if (models_dir / "ATLAS_SOURCE.txt").exists():
+        return                      # a real atlas is installed; never mix in schematic layers
+    missing = [spec.id for spec in ANATOMY_LAYERS
+               if spec.id in BUILDERS
+               and not any((models_dir / name).exists() for name in spec.filename_candidates())]
+    if not missing:
+        return
+    print(f"Building reference anatomy for {len(missing)} layer(s)…", flush=True)
+    for layer_id in missing:
+        try:
+            write_structures(BUILDERS[layer_id](), models_dir / f"{layer_id}.vtp",
+                             source="procedural-reference-body")
+        except Exception as exc:     # never block start-up on one layer
+            print(f"  [warn] {layer_id}: {exc}", flush=True)
+
+
 def main() -> int:
     _set_windows_app_id()
 
@@ -65,6 +94,7 @@ def main() -> int:
 
     config = AppConfig.load()
     config.paths.ensure()
+    _ensure_reference_anatomy(config.paths.models)
 
     apply_theme(app, config)
 
@@ -76,11 +106,9 @@ def main() -> int:
     window = MainWindow(config)
     window.show()
 
-    # First-run convenience: generate placeholder anatomy if the user has no models.
     if not any(config.paths.models.glob("*.*")):
         window.status_message(
-            "No 3D models found — run  python tools\\generate_demo_models.py  "
-            "to create placeholder anatomy.",
+            "No 3D models found — run  python tools\\generate_demo_models.py",
             timeout_ms=12000,
         )
 

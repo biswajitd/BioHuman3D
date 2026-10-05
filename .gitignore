@@ -6,3 +6,14 @@ dist/
 build/
 *.log
 .env
+
+# Generated / imported anatomy (rebuilt by main.py or tools/generate_demo_models.py,
+# or written by tools/fetch_anatomy.py). Atlas data carries its own licence.
+app/assets/models/*.vtp
+app/assets/models/*.glb
+app/assets/models/*.obj
+app/assets/models/*.stl
+app/assets/models/import_report.txt
+app/assets/audio/cache/
+app/assets/imaging/
+*.pyc

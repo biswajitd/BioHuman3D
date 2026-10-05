@@ -82,7 +82,9 @@ class SceneController(QObject):
         self._selected_id = layer_id
         self._selected_label = label or (self.registry.label(layer_id) if layer_id else "")
         if layer_id:
-            self.viewport.set_highlight(layer_id)
+            highlight = getattr(self.viewport, "highlight_structure", None)
+            if not (label and highlight is not None and highlight(label)):
+                self.viewport.set_highlight(layer_id)
         self.structureChanged.emit(self._selected_id, self._selected_label)
         self._sync_ai_context()
 

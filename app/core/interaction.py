@@ -66,9 +66,10 @@ if VTK_AVAILABLE:
                     self._refresh_pick_list()
                     actor = self._pick_actor()
                     layer_id = self._viewport.layer_id_for_actor(actor)
-                    if layer_id != self._last_hover_id:
-                        self._last_hover_id = layer_id
-                        self._viewport._on_hover_changed(layer_id)
+                    key = (layer_id, self._viewport.structure_for_actor(actor))
+                    if key != self._last_hover_id:
+                        self._last_hover_id = key
+                        self._viewport._on_hover_changed(layer_id, actor)
             self.OnMouseMove()          # preserve default orbit / pan
 
         def _on_left_press(self, _obj, _event) -> None:

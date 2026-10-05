@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import shutil
 import sys
 import tempfile
@@ -57,6 +58,13 @@ try:
 except Exception as exc:  # pragma: no cover
     print(f"[error] VTK is required: {exc}")
     raise SystemExit(1)
+
+from app.anatomy.atlas_frame import apply_matrix, infer_frame  # noqa: E402
+from app.anatomy.structures import source_of, write_structures  # noqa: E402
+
+#: Written next to imported layers; main.py then stops auto-filling missing
+#: layers with the schematic body (which would not line up with real data).
+ATLAS_MARKER = "ATLAS_SOURCE.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +97,23 @@ CLASSIFICATION_RULES: Sequence[Tuple[str, Tuple[str, ...]]] = (
     ("muscles", ("muscle", "muscul", "biceps", "triceps", "deltoid",
                  "pectoral", "latissimus", "trapezius", "quadriceps",
                  "gastrocnemius", "gluteus", "diaphragm muscle", "sartorius",
-                 "soleus", "masseter", "temporalis")),
+                 "soleus", "masseter", "temporalis",
+                 # BodyParts3D names most muscles without the word "muscle".
+                 "vastus", "rectus femoris", "rectus abdominis", "oblique",
+                 "adductor", "abductor", "flexor", "extensor", "pronator",
+                 "supinator", "gracilis", "semitendinosus", "semimembranosus",
+                 "iliacus", "psoas", "piriformis", "obturator internus",
+                 "obturator externus", "teres", "rhomboid", "levator",
+                 "scalen", "sternocleidomastoid", "platysma", "orbicularis",
+                 "buccinator", "zygomaticus", "tibialis", "fibularis",
+                 "peroneus", "plantaris", "popliteus", "infraspinatus",
+                 "supraspinatus", "subscapularis", "coracobrachialis",
+                 "brachialis", "brachioradialis", "serratus", "splenius",
+                 "semispinalis", "multifidus", "quadratus", "transversus",
+                 "gemellus", "pectineus", "tensor", "erector spinae",
+                 "iliocostalis", "longissimus", "spinalis", "pterygoid",
+                 "digastric", "mylohyoid", "sternohyoid", "omohyoid",
+                 "lumbrical", "interosse", "opponens", "anconeus")),
     # -- vascular --------------------------------------------------------
     ("arteries", ("artery", "arteri", "aorta", "aortic", "carotid",
                   "subclavian", "brachial", "radial artery", "femoral artery",
@@ -140,11 +164,18 @@ def find_meshes(source: Path) -> List[Path]:
     return sorted(set(found))
 
 
-def load_name_map(source: Path, explicit: Optional[Path] = None) -> Dict[str, str]:
-    """Build ``id -> English name`` from a TSV/CSV, if one is supplied or found.
+_ID_LIKE = re.compile(r"^[A-Za-z]{1,4}\d+(?:[_\-.][A-Za-z0-9]+)?$")
 
-    BodyParts3D and similar atlases ship a table mapping opaque ids (FMA/TA codes)
-    to names; without it every file is unclassifiable.
+
+def load_name_map(source: Path, explicit: Optional[Path] = None,
+                  stems: Optional[set] = None) -> Dict[str, str]:
+    """Build ``id -> English name`` from TSV/CSV tables, if supplied or found.
+
+    BodyParts3D ships ``isa_element_parts.txt`` with rows like
+    ``FMA7088 <tab> heart <tab> FJ2410``: the mesh files are named by the FJ
+    element id, not the FMA concept id. So for every row the key is whichever
+    cell names an actual mesh file (when *stems* is given), and the value is
+    the cell that reads like an English name rather than an id.
     """
     candidates: List[Path] = []
     if explicit is not None:
@@ -166,16 +197,21 @@ def load_name_map(source: Path, explicit: Optional[Path] = None) -> Dict[str, st
         except Exception:
             continue
         for row in rows:
-            if len(row) < 2:
+            cells = [c.strip() for c in row if c and c.strip()]
+            if len(cells) < 2 or cells[0].lower() in ("id", "fma_id", "name", "concept id"):
                 continue
-            key, value = row[0].strip(), row[1].strip()
-            if not key or not value or key.lower() in ("id", "fma_id", "name"):
+            names = [c for c in cells if not _ID_LIKE.match(c) and any(ch.isalpha() for ch in c)]
+            if not names:
                 continue
-            # Prefer a later English-looking column when present.
-            for cell in row[1:]:
-                if cell.strip() and cell.strip().isascii():
-                    value = cell.strip()
-            mapping.setdefault(key, value)
+            value = max(names, key=lambda c: (c.isascii(), len(c)))
+            keys = [c for c in cells if _ID_LIKE.match(c)]
+            if stems:
+                matched = [k for k in keys if k in stems]
+                keys = matched or keys[:1]
+            else:
+                keys = keys[:1] or [cells[0]]
+            for key in keys:
+                mapping.setdefault(key, value)
     return mapping
 
 
@@ -269,18 +305,19 @@ def write_vtp(polydata, destination: Path) -> bool:
 # Runner
 # ---------------------------------------------------------------------------
 def run_import(source: Path, out_dir: Path, mapping_file: Optional[Path],
-               dry_run: bool, merge_layers: bool) -> int:
+               dry_run: bool, merge_layers: bool, normalise: bool = True,
+               source_tag: str = "imported-atlas") -> int:
     meshes = find_meshes(source)
     if not meshes:
         print(f"[error] no mesh files found under {source}")
         print(f"        looked for: {', '.join(MESH_EXTENSIONS)}")
         return 1
 
-    mapping = load_name_map(source, mapping_file)
+    mapping = load_name_map(source, mapping_file, stems={m.stem for m in meshes})
     if mapping:
         print(f"[info]  name table: {len(mapping)} id -> name entries")
 
-    buckets: Dict[str, List[Path]] = defaultdict(list)
+    buckets: Dict[str, List[Tuple[Path, str]]] = defaultdict(list)
     unmapped: List[Path] = []
     for mesh in meshes:
         label = name_for(mesh, mapping)
@@ -288,13 +325,13 @@ def run_import(source: Path, out_dir: Path, mapping_file: Optional[Path],
         if layer is None:
             unmapped.append(mesh)
         else:
-            buckets[layer].append(mesh)
+            buckets[layer].append((mesh, label))
 
     print()
     print(f"{'layer':<14} {'meshes':>7}  examples")
     print("-" * 74)
     for layer in sorted(buckets):
-        examples = ", ".join(m.name for m in buckets[layer][:3])
+        examples = ", ".join(label for _m, label in buckets[layer][:3])
         print(f"{layer:<14} {len(buckets[layer]):>7}  {examples[:52]}")
     if unmapped:
         print(f"{'UNMAPPED':<14} {len(unmapped):>7}  "
@@ -309,25 +346,66 @@ def run_import(source: Path, out_dir: Path, mapping_file: Optional[Path],
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    written = 0
-    for layer, files in sorted(buckets.items()):
-        target = out_dir / f"{layer}.vtp"
-        if not merge_layers:
-            # Keep originals alongside; the app loads <layer>.vtp only.
-            for index, mesh in enumerate(files):
+    if not merge_layers:
+        for layer, files in sorted(buckets.items()):
+            for index, (mesh, _label) in enumerate(files):
                 shutil.copy2(mesh, out_dir / f"{layer}_{index:03d}{mesh.suffix}")
+        print(f"\nCopied meshes into {out_dir} (not merged).")
+        return 0
+
+    # Read everything once; names are kept per mesh.
+    named_by_layer: Dict[str, List[Tuple[str, object]]] = {}
+    seen_names: Dict[str, int] = {}
+    for layer, files in sorted(buckets.items()):
+        items = []
+        for mesh, label in files:
+            poly = read_polydata(mesh)
+            if poly is None or not poly.GetNumberOfPoints():
+                continue
+            name = label if label != mesh.stem else mesh.stem.replace("_", " ")
+            count = seen_names.get(name.lower(), 0)
+            seen_names[name.lower()] = count + 1
+            items.append((name if not count else f"{name} ({count + 1})", poly))
+        named_by_layer[layer] = items
+
+    matrix = None
+    if normalise:
+        flat = {name: poly for items in named_by_layer.values() for name, poly in items}
+        report = infer_frame(flat)
+        matrix = report.matrix
+        print("\n[frame] " + "\n[frame] ".join(report.notes))
+
+    written = 0
+    for layer, items in named_by_layer.items():
+        target = out_dir / f"{layer}.vtp"
+        if matrix is not None:
+            items = [(name, apply_matrix(poly, matrix)) for name, poly in items]
+        if not items:
+            print(f"[warn]  {layer}: nothing readable, skipped")
             continue
         if target.exists():
             target.unlink()
-        polydata = merge([read_polydata(f) for f in files])
-        if polydata is None or not polydata.GetNumberOfPoints():
-            print(f"[warn]  {layer}: nothing readable, skipped")
-            continue
-        if write_vtp(polydata, target):
+        triangles = write_structures(items, target, source=source_tag)
+        if triangles:
             written += 1
-            print(f"[ok]    {target.name:<16} "
-                  f"{polydata.GetNumberOfPoints():>9,} points  "
-                  f"{polydata.GetNumberOfPolys():>9,} polys")
+            print(f"[ok]    {target.name:<16} {len(items):>6} structures  {triangles:>9,} triangles")
+
+    # Never mix scan-derived layers with the schematic body: they come from
+    # different people and would not line up. Remove procedural leftovers.
+    removed = []
+    for stale in out_dir.glob("*.vtp"):
+        if stale.stem in named_by_layer:
+            continue
+        reader = vtk.vtkXMLPolyDataReader()
+        reader.SetFileName(str(stale))
+        reader.Update()
+        if source_of(reader.GetOutput()).startswith("procedural"):
+            stale.unlink()
+            removed.append(stale.stem)
+    (out_dir / ATLAS_MARKER).write_text(
+        f"source={source_tag}\nlayers={','.join(sorted(named_by_layer))}\n", encoding="utf-8")
+    if removed:
+        print(f"[info]  removed schematic layers not present in the atlas: {', '.join(sorted(removed))}")
 
     print(f"\nDone - {written} layer file(s) written to {out_dir}")
     print("Restart BioHuman3D to load them.")
@@ -380,14 +458,16 @@ def self_test() -> int:
         writer.Write()
 
     # A name table with opaque ids, as BodyParts3D ships.
-    (source / "isa_BP3D.txt").write_text(
-        "FMA5018\tleft femur\nFMA7088\theart\nFMA7714\tcerebrum\n",
+    # A BodyParts3D-style element table: concept id, name, element (file) id.
+    (source / "isa_element_parts.txt").write_text(
+        "concept id\tEnglish name\telement file id\n"
+        "FMA24474\tleft femur\tFJ3259\nFMA7088\theart\tFJ2410\nFMA7714\tcerebrum\tFJ1234\n",
         encoding="utf-8")
-    for fid in ("FMA5018", "FMA7088", "FMA7714"):
+    for fid in ("FJ3259", "FJ2410", "FJ1234"):
         shutil.copy2(source / "heart.obj", source / f"{fid}.obj")
 
     out = workdir / "out"
-    code = run_import(source, out, None, dry_run=False, merge_layers=True)
+    code = run_import(source, out, None, dry_run=False, merge_layers=True, normalise=False)
     if code != 0:
         print("[FAIL] importer returned an error")
         return 1
@@ -408,6 +488,13 @@ def self_test() -> int:
             print(f"   - {item}")
         return 1
 
+    # Names must survive the merge: the element-table id resolves to its name.
+    from app.anatomy.structures import read_structures
+    skeleton = [name for name, _p in (read_structures(out / "skeleton.vtp") or [])]
+    if "left femur" not in skeleton:
+        print(f"[FAIL] structure names lost in merge: {skeleton}")
+        return 1
+    print(f"[PASS] structure names preserved (skeleton: {', '.join(skeleton)})")
     print("\n[PASS] every labelled mesh reached its intended layer")
     shutil.rmtree(workdir, ignore_errors=True)
     return 0
@@ -427,6 +514,10 @@ def main() -> int:
                         help="report the mapping without writing anything")
     parser.add_argument("--no-merge", dest="merge_layers", action="store_false",
                         help="copy meshes individually instead of merging per layer")
+    parser.add_argument("--no-normalise", dest="normalise", action="store_false",
+                        help="keep the dataset's own units/orientation")
+    parser.add_argument("--tag", default="imported-atlas",
+                        help="provenance tag stored in each layer file")
     parser.add_argument("--self-test", action="store_true",
                         help="verify the pipeline with a synthetic dataset")
     args = parser.parse_args()
@@ -440,7 +531,7 @@ def main() -> int:
         print(f"[error] source folder not found: {args.source}")
         return 1
     return run_import(args.source, args.out, args.mapping, args.dry_run,
-                      args.merge_layers)
+                      args.merge_layers, args.normalise, args.tag)
 
 
 if __name__ == "__main__":

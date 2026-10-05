@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from app.anatomy import structures as st
 from app.core.model_registry import LayerRegistry, LayerSpec
 from app.core import vtk_utils as vu
 from app.core.vtk_utils import VTK_AVAILABLE, vtk, QVTKRenderWindowInteractor
@@ -52,6 +53,8 @@ class LayerState:
     origin: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     explode_vector: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     is_placeholder: bool = False
+    structures: List[str] = field(default_factory=list)   # parallel to ``actors``
+    source: str = ""                     # provenance tag of the model file
 
     @property
     def actor_count(self) -> int:
@@ -102,6 +105,8 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         self._config = config
         self._layers: Dict[str, LayerState] = {}
         self._actor_to_layer: Dict[int, str] = {}
+        self._actor_to_structure: Dict[object, str] = {}
+        self._structure_index: Dict[str, Tuple[str, int]] = {}   # lower name -> (layer, idx)
         self._highlight_cache: Dict[str, object] = {}
         self._highlight_actor = None
         self._highlight_layer: Optional[str] = None
@@ -223,23 +228,46 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         file receive a deterministic placeholder primitive so the UI, picking and
         opacity tools remain fully exercisable before real anatomy is installed.
         """
+        self.clear_scene()
         loaded = placeholders = 0
         for spec in self._registry.specs:
             resolved = self._registry.resolve(spec.id)
             polydata_list = []
+            names: List[str] = []
+            source = ""
 
             if resolved is not None:
                 for path in resolved.paths:
                     if path.suffix.lower() in (".glb", ".gltf"):
-                        for _name, poly in vu.read_gltf_nodes(path):
+                        for name, poly in vu.read_gltf_nodes(path):
                             if poly is not None and poly.GetNumberOfPoints():
                                 polydata_list.append(
                                     vu.condition_polydata(poly, decimate_ratio=decimate_ratio))
+                                names.append(st.display_name(name))
                     else:
                         poly, _err = vu.read_polydata(path)
-                        if poly is not None and poly.GetNumberOfPoints():
+                        if poly is None or not poly.GetNumberOfPoints():
+                            continue
+                        source = source or st.source_of(poly)
+                        if st.is_labelled(poly):
+                            # Condition once for the whole layer (cell labels
+                            # survive smoothing + normals), then split into one
+                            # pickable actor per named structure.
+                            field_data = vtk.vtkFieldData()
+                            field_data.ShallowCopy(poly.GetFieldData())
+                            conditioned = vu.condition_polydata(
+                                poly, smooth_iterations=0 if source.startswith("procedural") else 12)
+                            conditioned.GetFieldData().ShallowCopy(field_data)
+                            for name, piece in st.split_structures(conditioned, spec.label):
+                                if decimate_ratio:
+                                    piece = vu.condition_polydata(
+                                        piece, decimate_ratio=decimate_ratio, smooth_iterations=0)
+                                polydata_list.append(piece)
+                                names.append(st.display_name(name))
+                        else:
                             polydata_list.append(
                                 vu.condition_polydata(poly, decimate_ratio=decimate_ratio))
+                            names.append("")
 
             is_placeholder = False
             if not polydata_list and allow_placeholders:
@@ -251,7 +279,9 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
             if not polydata_list:
                 continue
 
-            self._add_layer(spec, polydata_list, is_placeholder)
+            if is_placeholder:
+                names = [""]
+            self._add_layer(spec, polydata_list, is_placeholder, names, source)
             if is_placeholder:
                 placeholders += 1
             else:
@@ -263,7 +293,8 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         self.sceneLoaded.emit(loaded, placeholders)
         return loaded, placeholders
 
-    def _add_layer(self, spec: LayerSpec, polydata_list: List[object], placeholder: bool) -> None:
+    def _add_layer(self, spec: LayerSpec, polydata_list: List[object], placeholder: bool,
+                   names: Optional[List[str]] = None, source: str = "") -> None:
         state = LayerState(
             id=spec.id,
             label=spec.label,
@@ -274,9 +305,12 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
             base_opacity=spec.default_opacity,
             explode_vector=tuple(spec.explode_vector),
             is_placeholder=placeholder,
+            source=source,
         )
+        names = list(names or [])
+        names += [""] * (len(polydata_list) - len(names))
 
-        for poly in polydata_list:
+        for poly, name in zip(polydata_list, names):
             actor = vu.make_surface_actor(poly, spec.color, spec.default_opacity)
             actor.SetVisibility(spec.default_visible)
             if placeholder:
@@ -288,6 +322,10 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
             state.polydata.append(poly)
             self._actor_to_layer[id(actor)] = spec.id
             self._actor_to_layer[actor.GetAddressAsString("")] = spec.id
+            if name:
+                self._actor_to_structure[id(actor)] = name
+                self._structure_index.setdefault(name.lower(), (spec.id, len(state.actors) - 1))
+            state.structures.append(name)
 
         self._layers[spec.id] = state
 
@@ -329,11 +367,130 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
         out = []
         for state in self._layers.values():
             if state.visible and state.opacity > 0.08:
-                out.extend(state.actors)
+                out.extend(a for a in state.actors
+                           if a.GetVisibility() and a.GetProperty().GetOpacity() > 0.08)
         return out
 
     def visible_layers(self) -> List[str]:
         return [s.id for s in self._layers.values() if s.visible and s.opacity > 0.15]
+
+    def clear_scene(self) -> None:
+        """Remove every layer actor (used before a reload)."""
+        if self._highlight_actor is not None:
+            self._renderer.RemoveActor(self._highlight_actor)
+            self._highlight_actor = None
+        for state in self._layers.values():
+            for actor in state.actors:
+                self._renderer.RemoveActor(actor)
+        self._layers.clear()
+        self._actor_to_layer.clear()
+        self._actor_to_structure.clear()
+        self._structure_index.clear()
+        self._highlight_cache.clear()
+        self._clip_plane = None
+
+    # ------------------------------------------------------------ structures
+    def structure_for_actor(self, actor) -> str:
+        """Anatomical name of the structure an actor draws ("" if unnamed)."""
+        return self._actor_to_structure.get(id(actor), "") if actor is not None else ""
+
+    def structure_names(self, layer_id: Optional[str] = None) -> List[str]:
+        """Named structures in one layer, or in the whole scene."""
+        layers = [self._layers[layer_id]] if layer_id in self._layers else (
+            [] if layer_id else list(self._layers.values()))
+        return [name for state in layers for name in state.structures if name]
+
+    def has_structure_names(self) -> bool:
+        return bool(self._structure_index)
+
+    def find_structures(self, query: str, layer_id: str = "") -> List[Tuple[str, str]]:
+        """``(layer_id, name)`` for every structure whose name contains *query*
+        (case-insensitive). All words of a multi-word query must match."""
+        words = [w for w in (query or "").lower().split() if w]
+        out = []
+        for state in self._layers.values():
+            if layer_id and state.id != layer_id:
+                continue
+            for name in state.structures:
+                low = name.lower()
+                if name and all(w in low for w in words):
+                    out.append((state.id, name))
+        return out
+
+    def locate_structure(self, name: str) -> Optional[Tuple[str, int]]:
+        """``(layer_id, actor index)`` for an exact (case-insensitive) name."""
+        return self._structure_index.get((name or "").lower())
+
+    def structure_actor(self, name: str):
+        hit = self.locate_structure(name)
+        return self._layers[hit[0]].actors[hit[1]] if hit else None
+
+    def structure_polydata(self, name: str):
+        hit = self.locate_structure(name)
+        return self._layers[hit[0]].polydata[hit[1]] if hit else None
+
+    def structure_bounds(self, names: Sequence[str]):
+        """Union bounds of named structures, or ``None``."""
+        bounds = [1e18, -1e18, 1e18, -1e18, 1e18, -1e18]
+        found = False
+        for name in names:
+            poly = self.structure_polydata(name)
+            if poly is None:
+                continue
+            found = True
+            b = poly.GetBounds()
+            for k in range(3):
+                bounds[2 * k] = min(bounds[2 * k], b[2 * k])
+                bounds[2 * k + 1] = max(bounds[2 * k + 1], b[2 * k + 1])
+        return tuple(bounds) if found else None
+
+    def highlight_structure(self, name: str) -> bool:
+        """Neon edge overlay on a single named structure."""
+        poly = self.structure_polydata(name)
+        if poly is None:
+            return False
+        if self._highlight_actor is not None:
+            self._renderer.RemoveActor(self._highlight_actor)
+        key = f"structure::{name.lower()}"
+        cached = self._highlight_cache.get(key)
+        if cached is None:
+            builder = vu.make_outline_actor if poly.GetNumberOfCells() > _HUGE_MESH_CELLS else vu.make_edge_actor
+            cached = builder(poly, color=(0.15, 0.88, 1.0))
+            self._highlight_cache[key] = cached
+        self._highlight_actor = cached
+        self._highlight_layer = self.locate_structure(name)[0]
+        self._renderer.AddActor(cached)
+        self._render()
+        return True
+
+    def isolate_structures(self, names: Sequence[str], ghost_opacity: float = _GHOST_OPACITY,
+                           *, focus: bool = True) -> int:
+        """Show only the named structures at full opacity; ghost everything else.
+        Returns how many of *names* were found."""
+        wanted = {n.lower() for n in names}
+        hits = 0
+        for state in self._layers.values():
+            any_hit = False
+            for actor, name in zip(state.actors, state.structures):
+                hit = bool(name) and name.lower() in wanted
+                any_hit |= hit
+                hits += hit
+                actor.SetVisibility(True)
+                actor.GetProperty().SetOpacity(1.0 if hit else ghost_opacity)
+            state.visible = True
+            state.opacity = 1.0 if any_hit else ghost_opacity
+        if focus and hits:
+            self.focus_structures(names)
+        self._render()
+        return hits
+
+    def focus_structures(self, names: Sequence[str]) -> None:
+        bounds = self.structure_bounds(names)
+        if bounds is None:
+            return
+        self._renderer.ResetCamera(bounds)
+        self._renderer.ResetCameraClippingRange()
+        self._render()
 
     # ------------------------------------------------------- layer control
     def set_layer_opacity(self, layer_id: str, opacity: float) -> None:
@@ -417,7 +574,7 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
             if state is None or not state.polydata:
                 self._render()
                 return
-            poly = state.polydata[0]
+            poly = state.polydata[0] if len(state.polydata) == 1 else _append_all(state.polydata)
             cells = poly.GetNumberOfCells() if poly else 0
             builder = vu.make_outline_actor if cells > _HUGE_MESH_CELLS else vu.make_edge_actor
             cached = builder(poly, color=(0.15, 0.88, 1.0))
@@ -641,19 +798,22 @@ class Interactive3DViewport(QVTKRenderWindowInteractor):
             pass
 
     # -- called by the interactor style ------------------------------------
-    def _on_hover_changed(self, layer_id: Optional[str]) -> None:
+    def _on_hover_changed(self, layer_id: Optional[str], actor=None) -> None:
         """Hover feedback: hand-shaped cursor over a structure, arrow over empty space."""
         from PyQt6.QtCore import Qt
         self.setCursor(Qt.CursorShape.PointingHandCursor if layer_id
                        else Qt.CursorShape.ArrowCursor)
-        self.hoverChanged.emit(self._registry.label(layer_id) if layer_id else "")
+        name = self.structure_for_actor(actor)
+        self.hoverChanged.emit(name or (self._registry.label(layer_id) if layer_id else ""))
 
     def _on_click_picked(self, actor) -> None:
         layer_id = self.layer_id_for_actor(actor)
         self._last_pick_id = layer_id
         if layer_id:
-            self.set_highlight(layer_id)
-            self.structurePicked.emit(layer_id, self._registry.label(layer_id))
+            name = self.structure_for_actor(actor)
+            if not (name and self.highlight_structure(name)):
+                self.set_highlight(layer_id)
+            self.structurePicked.emit(layer_id, name or self._registry.label(layer_id))
         else:
             self.set_highlight(None)
             self.structurePicked.emit("", "")
@@ -721,6 +881,18 @@ class PlaceholderViewport(QWidget):
     def apply_camera_state(self, *_a, **_k): pass
     def snapshot(self, *_a, **_k): return None
     def visible_layers(self): return []
+    def clear_scene(self): pass
+    def structure_for_actor(self, *_a): return ""
+    def structure_names(self, *_a, **_k): return []
+    def has_structure_names(self): return False
+    def find_structures(self, *_a, **_k): return []
+    def locate_structure(self, *_a): return None
+    def structure_actor(self, *_a): return None
+    def structure_polydata(self, *_a): return None
+    def structure_bounds(self, *_a): return None
+    def highlight_structure(self, *_a): return False
+    def isolate_structures(self, *_a, **_k): return 0
+    def focus_structures(self, *_a, **_k): pass
     layers: Dict[str, LayerState] = {}
 
 
@@ -763,6 +935,14 @@ def create_viewport(registry: LayerRegistry, config, parent=None):
 # ---------------------------------------------------------------------------
 # Tiny vector math (avoids pulling numpy into the viewport hot path)
 # ---------------------------------------------------------------------------
+def _append_all(polys: Sequence[object]):
+    append = vtk.vtkAppendPolyData()
+    for poly in polys:
+        append.AddInputData(poly)
+    append.Update()
+    return append.GetOutput()
+
+
 def _cross(a: Sequence[float], b: Sequence[float]) -> List[float]:
     return [a[1] * b[2] - a[2] * b[1],
             a[2] * b[0] - a[0] * b[2],
